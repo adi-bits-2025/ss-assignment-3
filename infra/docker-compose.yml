@@ -1,0 +1,137 @@
+version: "3.9"
+
+services:
+
+  patient-service:
+    build: ../services/patient-service
+    container_name: patient-service
+    ports:
+      - "5001:5001"
+    environment:
+      PORT: 5001
+      DATA_DIR: /data/db
+    volumes:
+      - patient-db:/data/db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  doctor-schedule-service:
+    build: ../services/doctor-schedule-service
+    container_name: doctor-schedule-service
+    ports:
+      - "5002:5002"
+    environment:
+      PORT: 5002
+      DATA_DIR: /data/db
+    volumes:
+      - doctor-db:/data/db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  appointment-service:
+    build: ../services/appointment-service
+    container_name: appointment-service
+    ports:
+      - "5003:5003"
+    environment:
+      PORT: 5003
+      DATA_DIR: /data/db
+      PATIENT_SERVICE_URL: http://patient-service:5001
+      DOCTOR_SERVICE_URL: http://doctor-schedule-service:5002
+    volumes:
+      - appointment-db:/data/db
+    depends_on:
+      patient-service:
+        condition: service_healthy
+      doctor-schedule-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5003/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  prescription-service:
+    build: ../services/prescription-service
+    container_name: prescription-service
+    ports:
+      - "5004:5004"
+    environment:
+      PORT: 5004
+      DATA_DIR: /data/db
+      APPOINTMENT_SERVICE_URL: http://appointment-service:5003
+    volumes:
+      - prescription-db:/data/db
+    depends_on:
+      appointment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5004/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  billing-service:
+    build: ../services/billing-service
+    container_name: billing-service
+    ports:
+      - "5005:5005"
+    environment:
+      PORT: 5005
+      DATA_DIR: /data/db
+      PATIENT_SERVICE_URL: http://patient-service:5001
+      APPOINTMENT_SERVICE_URL: http://appointment-service:5003
+    volumes:
+      - billing-db:/data/db
+    depends_on:
+      patient-service:
+        condition: service_healthy
+      appointment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5005/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  demo-ui:
+    build: ../services/demo-ui
+    container_name: demo-ui
+    ports:
+      - "8501:8501"
+    environment:
+      PATIENT_SERVICE_URL: http://patient-service:5001
+      DOCTOR_SERVICE_URL: http://doctor-schedule-service:5002
+      APPOINTMENT_SERVICE_URL: http://appointment-service:5003
+      PRESCRIPTION_SERVICE_URL: http://prescription-service:5004
+      BILLING_SERVICE_URL: http://billing-service:5005
+    depends_on:
+      patient-service:
+        condition: service_healthy
+      doctor-schedule-service:
+        condition: service_healthy
+      appointment-service:
+        condition: service_healthy
+      prescription-service:
+        condition: service_healthy
+      billing-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  patient-db:
+  doctor-db:
+  appointment-db:
+  prescription-db:
+  billing-db:
