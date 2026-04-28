@@ -3,7 +3,7 @@ version: "3.9"
 services:
 
   patient-service:
-    build: ./patient-service
+    build: ../services/patient-service
     container_name: patient-service
     ports:
       - "5001:5001"
@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
 
   doctor-schedule-service:
-    build: ./doctor-schedule-service
+    build: ../services/doctor-schedule-service
     container_name: doctor-schedule-service
     ports:
       - "5002:5002"
@@ -37,7 +37,7 @@ services:
     restart: unless-stopped
 
   appointment-service:
-    build: ./appointment-service
+    build: ../services/appointment-service
     container_name: appointment-service
     ports:
       - "5003:5003"
@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
 
   prescription-service:
-    build: ./prescription-service
+    build: ../services/prescription-service
     container_name: prescription-service
     ports:
       - "5004:5004"
@@ -82,7 +82,7 @@ services:
     restart: unless-stopped
 
   billing-service:
-    build: ./billing-service
+    build: ../services/billing-service
     container_name: billing-service
     ports:
       - "5005:5005"
@@ -106,7 +106,7 @@ services:
     restart: unless-stopped
 
   demo-ui:
-    build: ./demo-ui
+    build: ../services/demo-ui
     container_name: demo-ui
     ports:
       - "8501:8501"
