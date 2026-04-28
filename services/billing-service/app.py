@@ -9,7 +9,7 @@ from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text, event
 from pythonjsonlogger import jsonlogger
-from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from models import db, Bill, Payment, VALID_BILL_STATUSES, VALID_PAYMENT_METHODS
 
@@ -54,7 +54,11 @@ REQUEST_COUNT = Counter(
 )
 BILLS_CREATED   = Counter('bills_created_total', 'Total bills created')
 PAYMENTS_MADE   = Counter('payments_recorded_total', 'Total payments recorded')
-
+PAYMENTS_FAILED     = Counter('payments_failed_total', 'Total failed payment attempts')
+BILL_CREATE_LATENCY = Histogram(
+    'bill_creation_latency_ms', 'Bill creation latency in ms',
+    buckets=[10, 50, 100, 250, 500, 1000, 2500]
+)
 
 @app.before_request
 def _start_timer():
@@ -254,8 +258,10 @@ def create_bill():
         amount=amount,
         status='OPEN',
     )
+    t0 = time.time()
     db.session.add(bill)
     db.session.commit()
+    BILL_CREATE_LATENCY.observe((time.time() - t0) * 1000)
     BILLS_CREATED.inc()
     logger.info('bill_created', extra={
         'bill_id': bill.id, 'patient_id': bill.patient_id,
@@ -313,6 +319,7 @@ def add_payment(bill_id):
     if not bill:
         return jsonify({'error': 'Bill not found'}), 404
     if bill.status in ('PAID', 'VOID'):
+        PAYMENTS_FAILED.inc()
         return jsonify({'error': f"Cannot add payment to a {bill.status} bill"}), 409
 
     data = request.get_json(force=True) or {}
@@ -329,6 +336,7 @@ def add_payment(bill_id):
         if amount <= 0:
             raise ValueError
     except (ValueError, TypeError):
+        PAYMENTS_FAILED.inc()
         return jsonify({'error': 'amount must be a positive number'}), 400
 
     payment = Payment(bill_id=bill_id, amount=amount, method=method)
