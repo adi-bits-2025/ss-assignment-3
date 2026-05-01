@@ -1,13 +1,11 @@
 import os
-import csv
-import time
 import logging
-from datetime import datetime
+import time
 
 import requests
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text, event
+from sqlalchemy import event
 from pythonjsonlogger import jsonlogger
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 
@@ -187,6 +185,8 @@ def create_prescription():
                if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
+    if data.get('id') and db.session.get(Prescription, int(data['id'])):
+        return jsonify({'error': 'Prescription already exists'}), 409
 
     # Cross-service validation
     appt, err = _verify_appointment(data['appointment_id'])
@@ -205,6 +205,7 @@ def create_prescription():
         return jsonify({'error': 'days must be a positive integer'}), 400
 
     rx = Prescription(
+        id=int(data['id']) if data.get('id') else None,
         appointment_id=int(data['appointment_id']),
         patient_id=int(data['patient_id']),
         doctor_id=int(data['doctor_id']),
@@ -247,44 +248,9 @@ def by_patient(patient_id):
     return jsonify([rx.to_dict() for rx in items])
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
-def seed_data():
-    if Prescription.query.count() > 0:
-        return
-    csv_dir = os.environ.get(
-        'CSV_DIR',
-        os.path.join(os.path.dirname(__file__), '..', '..', 'doc', 'HMS Dataset (1)')
-    )
-    csv_path = os.path.join(csv_dir, 'hms_prescriptions_indian.csv')
-    if not os.path.exists(csv_path):
-        logger.warning('seed_skipped', extra={'reason': f'CSV not found: {csv_path}'})
-        return
-    with open(csv_path, newline='', encoding='utf-8') as f:
-        for row in csv.DictReader(f):
-            try:
-                issued = datetime.fromisoformat(row['issued_at'])
-            except (ValueError, KeyError):
-                issued = datetime.utcnow()
-            db.session.execute(text(
-                "INSERT OR IGNORE INTO prescriptions"
-                " (id, appointment_id, patient_id, doctor_id, medication, dosage, days, issued_at)"
-                " VALUES (:id, :appointment_id, :patient_id, :doctor_id, :medication, :dosage, :days, :issued_at)"
-            ), {
-                'id': int(row['prescription_id']),
-                'appointment_id': int(row['appointment_id']),
-                'patient_id': int(row['patient_id']),
-                'doctor_id': int(row['doctor_id']),
-                'medication': row['medication'],
-                'dosage': row['dosage'],
-                'days': int(row['days']),
-                'issued_at': issued.isoformat(),
-            })
-    db.session.commit()
-    logger.info('seed_complete', extra={'table': 'prescriptions'})
-
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        seed_data()
     port = int(os.environ.get('PORT', 5004))
     app.run(host='0.0.0.0', port=port, debug=False)

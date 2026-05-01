@@ -5,7 +5,6 @@ metadata:
 data:
   PORT: "5003"
   DATA_DIR: "/data/db"
-  CSV_DIR: "/data/csvs"
   PATIENT_SERVICE_URL: "http://patient-service:5001"
   DOCTOR_SERVICE_URL: "http://doctor-schedule-service:5002"
 ---

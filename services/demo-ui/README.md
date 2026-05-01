@@ -1,28 +1,55 @@
 # Demo UI
 
-Simple Streamlit UI for recording an end-to-end HMS microservices flow.
+React-based project submission console for the HMS microservices demo.
 
-## Run locally
+The UI is designed for a formal demo rather than daily hospital operations. It has separate tabs for patient, doctor scheduling, appointment, billing, prescription, payment, notification, and API details. Each tab includes actions, outputs, and rule-validation messages.
+
+## Run With Docker Compose
+
+From repository root:
+
+```bash
+docker compose -f infra/docker-compose.yml up --build -d
+```
+
+Open:
+
+```text
+http://localhost:8501
+```
+
+## Run Locally
 
 ```bash
 cd services/demo-ui
-pip install -r requirements.txt
-streamlit run app.py
+npm install
+npm run build
+npm start
 ```
 
-UI will start at: `http://localhost:8501`
+The local server uses port `8501` by default. To use another port:
 
-## Optional environment variables
+```bash
+$env:PORT="8502"
+npm start
+```
 
-- `PATIENT_SERVICE_URL` (default: `http://localhost:5001`)
-- `DOCTOR_SERVICE_URL` (default: `http://localhost:5002`)
-- `APPOINTMENT_SERVICE_URL` (default: `http://localhost:5003`)
-- `PRESCRIPTION_SERVICE_URL` (default: `http://localhost:5004`)
-- `BILLING_SERVICE_URL` (default: `http://localhost:5005`)
+## Service Environment Variables
 
-## Swagger links
+- `PATIENT_SERVICE_URL` defaults to `http://localhost:5001`
+- `DOCTOR_SERVICE_URL` defaults to `http://localhost:5002`
+- `APPOINTMENT_SERVICE_URL` defaults to `http://localhost:5003`
+- `PRESCRIPTION_SERVICE_URL` defaults to `http://localhost:5004`
+- `BILLING_SERVICE_URL` defaults to `http://localhost:5005`
 
-From the app sidebar, open each service Swagger at:
+When running through Docker Compose, these are set to the internal service hostnames.
 
-- `/swagger`
-- raw OpenAPI json at `/swagger.json`
+## Demo Coverage
+
+- Patient CRUD, search by name or phone, and PII masking output.
+- Doctor listings, department filtering, and slot validation.
+- Appointment booking, rescheduling, cancellation, completion, and conflict scenario output.
+- Billing generation, tax calculation, cancellation adjustment, and bill status handling.
+- Prescription creation, retrieval, and invalid appointment rejection.
+- Payment idempotency scenario and notification alert display.
+- API details for `/v1` demo paths, OpenAPI links, standard error shape, pagination, filtering, and database-per-service ownership.
