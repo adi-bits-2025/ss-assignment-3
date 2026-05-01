@@ -1,21 +1,10 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: billing-service-config
-data:
-  PORT: "5005"
-  DATA_DIR: "/data/db"
-  PATIENT_SERVICE_URL: "http://patient-service:5001"
-  APPOINTMENT_SERVICE_URL: "http://appointment-service:5003"
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: billing-service
-  labels:
-    app: billing-service
+  namespace: hms
 spec:
-  replicas: 1
+  replicas: 1              # DO NOT increase for SQLite - data consistency
   selector:
     matchLabels:
       app: billing-service
@@ -27,40 +16,64 @@ spec:
       containers:
         - name: billing-service
           image: billing-service:latest
-          imagePullPolicy: Never
+          imagePullPolicy: Never    # because we built inside Minikube
           ports:
             - containerPort: 5005
           envFrom:
             - configMapRef:
-                name: billing-service-config
-          volumeMounts:
-            - name: db-storage
-              mountPath: /data/db
+                name: hms-config
+            - secretRef:
+                name: hms-secret
+          # Liveness and readiness probes using the /health endpoint
           livenessProbe:
             httpGet:
               path: /health
               port: 5005
             initialDelaySeconds: 10
-            periodSeconds: 15
+            periodSeconds: 30
           readinessProbe:
             httpGet:
               path: /health
               port: 5005
             initialDelaySeconds: 5
             periodSeconds: 10
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          volumeMounts:
+            - name: billing-db-storage
+              mountPath: /app/data         
       volumes:
-        - name: db-storage
-          emptyDir: {}
+        - name: billing-db-storage
+          persistentVolumeClaim:
+            claimName: billing-db-pvc
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: billing-service
+  namespace: hms
 spec:
-  type: NodePort
   selector:
     app: billing-service
   ports:
     - port: 5005
       targetPort: 5005
-      nodePort: 30005
+  type: ClusterIP      # internal only
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-service
+  namespace: hms
+spec:
+  selector:
+    app: billing-service
+  ports:
+    - port: 5005
+      targetPort: 5005
+  type: ClusterIP      # internal only

@@ -36,7 +36,7 @@ with app.app_context():
 
 # ── Service URLs ──────────────────────────────────────────────────────────────
 PATIENT_SERVICE_URL = os.environ.get('PATIENT_SERVICE_URL', 'http://localhost:5001')
-DOCTOR_SERVICE_URL  = os.environ.get('DOCTOR_SERVICE_URL',  'http://localhost:5002')
+DOCTOR_SCHEDULE_SERVICE_URL  = os.environ.get('DOCTOR_SCHEDULE_SERVICE_URL',  'http://localhost:5002')
 
 # ── JSON Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger('appointment-service')
@@ -203,7 +203,7 @@ def _verify_patient(patient_id):
 def _verify_doctor(doctor_id):
     """Returns (ok: bool, error_msg: str|None)."""
     try:
-        resp = requests.get(f"{DOCTOR_SERVICE_URL}/doctors/{doctor_id}", timeout=5)
+        resp = requests.get(f"{DOCTOR_SCHEDULE_SERVICE_URL}/doctors/{doctor_id}", timeout=5)
         if resp.status_code == 404:
             return False, f"Doctor {doctor_id} not found"
         resp.raise_for_status()

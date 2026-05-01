@@ -10,7 +10,7 @@ const port = Number(process.env.PORT || 8501);
 
 const services = {
   patient: process.env.PATIENT_SERVICE_URL || 'http://localhost:5001',
-  doctor: process.env.DOCTOR_SERVICE_URL || 'http://localhost:5002',
+  doctor: process.env.DOCTOR_SCHEDULE_SERVICE_URL || 'http://localhost:5002',
   appointment: process.env.APPOINTMENT_SERVICE_URL || 'http://localhost:5003',
   prescription: process.env.PRESCRIPTION_SERVICE_URL || 'http://localhost:5004',
   billing: process.env.BILLING_SERVICE_URL || 'http://localhost:5005'

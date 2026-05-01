@@ -37,7 +37,7 @@ npm start
 ## Service Environment Variables
 
 - `PATIENT_SERVICE_URL` defaults to `http://localhost:5001`
-- `DOCTOR_SERVICE_URL` defaults to `http://localhost:5002`
+- `DOCTOR_SCHEDULE_SERVICE_URL` defaults to `http://localhost:5002`
 - `APPOINTMENT_SERVICE_URL` defaults to `http://localhost:5003`
 - `PRESCRIPTION_SERVICE_URL` defaults to `http://localhost:5004`
 - `BILLING_SERVICE_URL` defaults to `http://localhost:5005`

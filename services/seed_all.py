@@ -21,7 +21,7 @@ CSV_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'HMS Dataset'))
 
 SERVICES = {
     'patient': 'http://localhost:5001',
-    'doctor': 'http://localhost:5002',
+    'doctor-schedule': 'http://localhost:5002',
     'appointment': 'http://localhost:5003',
     'prescription': 'http://localhost:5004',
     'billing': 'http://localhost:5005',
@@ -122,7 +122,7 @@ def seed_doctors():
             'department': row['department'],
             'specialization': row['specialization'],
         }
-        if post(f"{SERVICES['doctor']}/doctors", payload, f"doctor={row['doctor_id']}"):
+        if post(f"{SERVICES['doctor-schedule']}/doctors", payload, f"doctor={row['doctor_id']}"):
             ok += 1
 
     print(f"  Done: {ok}/{len(rows)} doctors\n")
