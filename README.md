@@ -94,6 +94,99 @@ From repository root:
 python test/test_workflows.py
 ```
 
+## Running on Minikube
+
+This repository can also be deployed to a local Kubernetes cluster using Minikube.
+
+### Prerequisites
+
+- `Minikube` installed on Windows (`winget install Kubernetes.minikube`)
+- `kubectl` installed and available on PATH
+- Docker Desktop or Docker Engine available for the Minikube Docker driver
+
+### Recommended Minikube workflow
+
+1. Clean start Minikube with the Docker driver and preloaded base image:
+
+```powershell
+minikube delete --all --purge
+docker rm -f minikube 2>$null
+docker pull gcr.io/k8s-minikube/kicbase:v0.0.50
+minikube start --driver=docker --base-image="gcr.io/k8s-minikube/kicbase:v0.0.50"
+```
+
+2. Verify the cluster and node are ready:
+
+```powershell
+kubectl cluster-info
+kubectl get nodes
+```
+
+3. Use Minikube's Docker daemon to build images directly into Minikube:
+
+```powershell
+minikube docker-env | Invoke-Expression
+# If that does not work, use:
+# & minikube -p minikube docker-env --shell powershell | Invoke-Expression
+```
+
+4. Build the service images from the project root:
+
+```powershell
+docker build -t patient-service:latest ./services/patient-service
+docker build -t doctor-schedule-service:latest ./services/doctor-schedule-service
+docker build -t appointment-service:latest ./services/appointment-service
+docker build -t prescription-service:latest ./services/prescription-service
+docker build -t billing-service:latest ./services/billing-service
+docker build -t demo-ui:latest ./services/demo-ui
+```
+
+5. Ensure all Kubernetes deployments use `imagePullPolicy: Never` so they use the locally built Minikube images.
+
+### Namespace, storage, and config
+
+- Create the `hms` namespace:
+
+```powershell
+kubectl create namespace hms
+kubectl config set-context --current --namespace=hms
+```
+
+- Apply persistent storage, config, and secret manifests from `infra/k8s`:
+
+```powershell
+kubectl apply -f infra/k8s/hms-storage.yaml -n hms
+kubectl apply -f infra/k8s/hms-config.yaml -n hms
+kubectl apply -f infra/k8s/hms-secret.yaml -n hms
+```
+
+### Deploy the HMS stack
+
+Apply the service and monitoring manifests in `infra/k8s` to deploy the application.
+
+### Restart script: `restart-hms.ps1`
+
+The `restart-hms.ps1` script automates the full Minikube deployment flow from the repository root.
+
+It performs the following actions:
+
+- deletes the existing `hms` namespace if present
+- rebuilds all backend and UI Docker images inside Minikube's Docker daemon
+- recreates the `hms` namespace
+- applies Kubernetes manifests from `infra/k8s`
+- creates an alias service `doctor-service` for `doctor-schedule-service` to avoid appointment service 503 issues
+- waits for all pods to become ready
+- starts background port-forwarding jobs for the services on ports 5001-5005
+- runs `services/seed_all.py` to populate sample data
+- prints the Demo UI URL from `minikube service demo-ui -n hms --url`
+
+To stop the port-forwarding jobs later:
+
+```powershell
+Get-Job | Stop-Job
+Get-Job | Remove-Job
+```
+
 ## Stop Services
 
 ```bash
