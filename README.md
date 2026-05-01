@@ -208,3 +208,55 @@ docker compose -f infra/docker-compose.yml down -v
 ```bash
 docker compose -f infra/docker-compose.yml up --build -d
 ```
+
+## Push Services to GitHub
+
+Each microservice has its own independent GitHub repository. Use the push script to push code from individual service directories to their respective repositories.
+
+### Prerequisites for Pushing
+
+- Git installed and configured with GitHub credentials (SSH or HTTPS)
+- Write access to the service repositories
+- All service directories should have uncommitted changes to push
+
+### Push Script Usage
+
+From the repository root, run one of the following:
+
+**On Windows (PowerShell):**
+```powershell
+.\push-services.ps1
+```
+
+**On Linux/macOS or Windows (Git Bash/WSL):**
+```bash
+chmod +x push-services.sh
+./push-services.sh
+```
+
+The script will:
+
+1. Navigate to each service directory (`services/{service-name}`)
+2. Initialize or update the git remote pointing to the service's GitHub repository
+3. Stage all changes (`git add -A`)
+4. Create a commit with a timestamp message
+5. Push to the `main` branch of the remote repository
+
+### Service Repositories
+
+The script pushes to the following repositories:
+
+- **Patient Service** → `https://github.com/adi-bits-2025/patient-service.git`
+- **Doctor Schedule Service** → `https://github.com/adi-bits-2025/doctoer-schedule-service.git`
+- **Appointment Service** → `https://github.com/adi-bits-2025/appointment-service.git`
+- **Prescription Service** → `https://github.com/adi-bits-2025/prescription-service.git`
+- **Billing Service** → `https://github.com/adi-bits-2025/billing-service.git`
+
+### Troubleshooting Push Issues
+
+- **PowerShell execution policy error**: If you see "running scripts is disabled on this system", use the bash script instead or run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` in PowerShell.
+- **Authentication failure**: Ensure your SSH key is added to `ssh-agent` or HTTPS credentials are configured.
+- **No changes to push**: If a service has no changes, the script will skip it.
+- **Branch divergence**: To force a push (if branches have diverged), modify the script to use `git push -u origin main --force` (use with caution).
+
+

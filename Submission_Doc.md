@@ -41,7 +41,7 @@ The **Hospital Management System (HMS)** is a microservices-based application th
 
 ## 3. System Architecture
 
-### 3.1 Nano Banana Prompt – Generate the Architecture Diagram
+### 3.1 Architecture Diagram
 
 ![alt text](images/image1_architecture.png)
 
