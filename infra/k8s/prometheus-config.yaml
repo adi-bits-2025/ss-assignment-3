@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: hms
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: 'patient-service'
+        static_configs:
+          - targets: ['patient-service:5001']
+      - job_name: 'doctor-schedule-service'
+        static_configs:
+          - targets: ['doctor-schedule-service:5002']
+      - job_name: 'appointment-service'
+        static_configs:
+          - targets: ['appointment-service:5003']
+      - job_name: 'prescription-service'
+        static_configs:
+          - targets: ['prescription-service:5004']
+      - job_name: 'billing-service'
+        static_configs:
+          - targets: ['billing-service:5005']

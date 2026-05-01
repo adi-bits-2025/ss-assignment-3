@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-ui
+  namespace: hms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-ui
+  template:
+    metadata:
+      labels:
+        app: demo-ui
+    spec:
+      containers:
+        - name: demo-ui
+          image: demo-ui:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8501
+          envFrom:
+            - configMapRef:
+                name: hms-config
+          # The demo-ui might need its own specific environment variables.
+          # If it calls backend APIs directly from the browser, we need to configure
+          # API_BASE_URL to point to the external NodePort/IP. For simplicity,
+          # we assume it uses the cluster-internal service names (server‑side proxy).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-ui
+  namespace: hms
+spec:
+  selector:
+    app: demo-ui
+  ports:
+    - port: 8501
+      targetPort: 8501
+  type: NodePort      # Expose on a random port (30000-32767) on the Minikube VM

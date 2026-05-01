@@ -5,7 +5,6 @@ metadata:
 data:
   PORT: "5001"
   DATA_DIR: "/data/db"
-  CSV_DIR: "/data/csvs"
 ---
 apiVersion: apps/v1
 kind: Deployment

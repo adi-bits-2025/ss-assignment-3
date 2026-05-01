@@ -1,2 +1,8 @@
+
 services/demo-ui/node_modules/
 services/demo-ui/dist/assets/
+
+node_modules/
+dist/
+__pycache__/
+*.pyc

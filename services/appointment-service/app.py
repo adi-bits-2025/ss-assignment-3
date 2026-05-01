@@ -1,5 +1,4 @@
 import os
-import csv
 import time
 import logging
 from datetime import datetime
@@ -7,7 +6,7 @@ from datetime import datetime
 import requests
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text, event
+from sqlalchemy import event
 from pythonjsonlogger import jsonlogger
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 
@@ -37,7 +36,7 @@ with app.app_context():
 
 # ── Service URLs ──────────────────────────────────────────────────────────────
 PATIENT_SERVICE_URL = os.environ.get('PATIENT_SERVICE_URL', 'http://localhost:5001')
-DOCTOR_SERVICE_URL  = os.environ.get('DOCTOR_SERVICE_URL',  'http://localhost:5002')
+DOCTOR_SCHEDULE_SERVICE_URL  = os.environ.get('DOCTOR_SCHEDULE_SERVICE_URL',  'http://localhost:5002')
 
 # ── JSON Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger('appointment-service')
@@ -204,7 +203,7 @@ def _verify_patient(patient_id):
 def _verify_doctor(doctor_id):
     """Returns (ok: bool, error_msg: str|None)."""
     try:
-        resp = requests.get(f"{DOCTOR_SERVICE_URL}/doctors/{doctor_id}", timeout=5)
+        resp = requests.get(f"{DOCTOR_SCHEDULE_SERVICE_URL}/doctors/{doctor_id}", timeout=5)
         if resp.status_code == 404:
             return False, f"Doctor {doctor_id} not found"
         resp.raise_for_status()
@@ -222,6 +221,8 @@ def create_appointment():
                if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
+    if data.get('id') and db.session.get(Appointment, int(data['id'])):
+        return jsonify({'error': 'Appointment already exists'}), 409
 
     # Cross-service validation
     ok, err = _verify_patient(data['patient_id'])
@@ -240,13 +241,17 @@ def create_appointment():
 
     if slot_end <= slot_start:
         return jsonify({'error': 'slot_end must be after slot_start'}), 400
+    status = (data.get('status') or 'SCHEDULED').upper()
+    if status not in VALID_STATUSES:
+        return jsonify({'error': f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}"}), 400
 
     appt = Appointment(
+        id=int(data['id']) if data.get('id') else None,
         patient_id=int(data['patient_id']),
         doctor_id=int(data['doctor_id']),
         department=data['department'],
         slot_start=slot_start, slot_end=slot_end,
-        status='SCHEDULED',
+        status=status,
     )
     db.session.add(appt)
     db.session.commit()
@@ -341,46 +346,9 @@ def reschedule(appt_id):
     return jsonify(appt.to_dict())
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
-def seed_data():
-    if Appointment.query.count() > 0:
-        return
-    csv_dir = os.environ.get(
-        'CSV_DIR',
-        os.path.join(os.path.dirname(__file__), '..', '..', 'doc', 'HMS Dataset (1)')
-    )
-    csv_path = os.path.join(csv_dir, 'hms_appointments_indian.csv')
-    if not os.path.exists(csv_path):
-        logger.warning('seed_skipped', extra={'reason': f'CSV not found: {csv_path}'})
-        return
-    with open(csv_path, newline='', encoding='utf-8') as f:
-        for row in csv.DictReader(f):
-            try:
-                slot_start = datetime.fromisoformat(row['slot_start'])
-                slot_end   = datetime.fromisoformat(row['slot_end'])
-                created    = datetime.fromisoformat(row['created_at'])
-            except (ValueError, KeyError):
-                continue
-            db.session.execute(text(
-                "INSERT OR IGNORE INTO appointments"
-                " (id, patient_id, doctor_id, department, slot_start, slot_end, status, created_at)"
-                " VALUES (:id, :patient_id, :doctor_id, :department, :slot_start, :slot_end, :status, :created_at)"
-            ), {
-                'id': int(row['appointment_id']),
-                'patient_id': int(row['patient_id']),
-                'doctor_id': int(row['doctor_id']),
-                'department': row['department'],
-                'slot_start': slot_start.isoformat(),
-                'slot_end': slot_end.isoformat(),
-                'status': row.get('status', 'SCHEDULED'),
-                'created_at': created.isoformat(),
-            })
-    db.session.commit()
-    logger.info('seed_complete', extra={'table': 'appointments'})
-
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        seed_data()
     port = int(os.environ.get('PORT', 5003))
     app.run(host='0.0.0.0', port=port, debug=False)

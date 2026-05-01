@@ -1,13 +1,11 @@
 import os
-import csv
-import time
 import logging
-from datetime import datetime
+import time
 
 import requests
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text, event
+from sqlalchemy import event
 from pythonjsonlogger import jsonlogger
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -236,6 +234,8 @@ def create_bill():
     missing = [f for f in ('patient_id', 'appointment_id', 'amount') if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
+    if data.get('id') and db.session.get(Bill, int(data['id'])):
+        return jsonify({'error': 'Bill already exists'}), 409
 
     try:
         amount = float(data['amount'])
@@ -251,12 +251,16 @@ def create_bill():
     ok, err = _verify_appointment(data['appointment_id'])
     if not ok:
         return jsonify({'error': err}), 404 if 'not found' in err else 503
+    status = (data.get('status') or 'OPEN').upper()
+    if status not in VALID_BILL_STATUSES:
+        return jsonify({'error': f"Invalid status. Must be one of: {', '.join(VALID_BILL_STATUSES)}"}), 400
 
     bill = Bill(
+        id=int(data['id']) if data.get('id') else None,
         patient_id=int(data['patient_id']),
         appointment_id=int(data['appointment_id']),
         amount=amount,
-        status='OPEN',
+        status=status,
     )
     t0 = time.time()
     db.session.add(bill)
@@ -326,6 +330,8 @@ def add_payment(bill_id):
     missing = [f for f in ('amount', 'method') if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
+    if data.get('id') and db.session.get(Payment, int(data['id'])):
+        return jsonify({'error': 'Payment already exists'}), 409
 
     method = str(data['method']).upper()
     if method not in VALID_PAYMENT_METHODS:
@@ -339,7 +345,10 @@ def add_payment(bill_id):
         PAYMENTS_FAILED.inc()
         return jsonify({'error': 'amount must be a positive number'}), 400
 
-    payment = Payment(bill_id=bill_id, amount=amount, method=method)
+    payment = Payment(
+        id=int(data['id']) if data.get('id') else None,
+        bill_id=bill_id, amount=amount, method=method,
+    )
     db.session.add(payment)
 
     # Sum all payments to determine if bill is fully paid
@@ -364,68 +373,9 @@ def list_payments(bill_id):
     return jsonify([p.to_dict() for p in bill.payments])
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
-def seed_data():
-    if Bill.query.count() > 0:
-        return
-    csv_dir = os.environ.get(
-        'CSV_DIR',
-        os.path.join(os.path.dirname(__file__), '..', '..', 'doc', 'HMS Dataset (1)')
-    )
-
-    bills_path    = os.path.join(csv_dir, 'hms_bills_indian.csv')
-    payments_path = os.path.join(csv_dir, 'hms_payments_indian.csv')
-
-    if os.path.exists(bills_path):
-        with open(bills_path, newline='', encoding='utf-8') as f:
-            for row in csv.DictReader(f):
-                try:
-                    created = datetime.fromisoformat(row['created_at'])
-                except (ValueError, KeyError):
-                    created = datetime.utcnow()
-                db.session.execute(text(
-                    "INSERT OR IGNORE INTO bills"
-                    " (id, patient_id, appointment_id, amount, status, created_at)"
-                    " VALUES (:id, :patient_id, :appointment_id, :amount, :status, :created_at)"
-                ), {
-                    'id': int(row['bill_id']),
-                    'patient_id': int(row['patient_id']),
-                    'appointment_id': int(row['appointment_id']),
-                    'amount': float(row['amount']),
-                    'status': row.get('status', 'OPEN'),
-                    'created_at': created.isoformat(),
-                })
-        db.session.commit()
-        logger.info('seed_complete', extra={'table': 'bills'})
-    else:
-        logger.warning('seed_skipped', extra={'reason': f'CSV not found: {bills_path}'})
-
-    if os.path.exists(payments_path):
-        with open(payments_path, newline='', encoding='utf-8') as f:
-            for row in csv.DictReader(f):
-                try:
-                    paid_at = datetime.fromisoformat(row['paid_at'])
-                except (ValueError, KeyError):
-                    paid_at = datetime.utcnow()
-                db.session.execute(text(
-                    "INSERT OR IGNORE INTO payments"
-                    " (id, bill_id, amount, method, paid_at)"
-                    " VALUES (:id, :bill_id, :amount, :method, :paid_at)"
-                ), {
-                    'id': int(row['payment_id']),
-                    'bill_id': int(row['bill_id']),
-                    'amount': float(row['amount']),
-                    'method': row.get('method', 'CASH'),
-                    'paid_at': paid_at.isoformat(),
-                })
-        db.session.commit()
-        logger.info('seed_complete', extra={'table': 'payments'})
-    else:
-        logger.warning('seed_skipped', extra={'reason': f'CSV not found: {payments_path}'})
-
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        seed_data()
     port = int(os.environ.get('PORT', 5005))
     app.run(host='0.0.0.0', port=port, debug=False)
