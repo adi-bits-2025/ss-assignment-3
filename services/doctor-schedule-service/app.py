@@ -1,12 +1,11 @@
 import os
-import csv
 import time
 import logging
 from datetime import datetime
 
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text, event
+from sqlalchemy import event
 from pythonjsonlogger import jsonlogger
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 
@@ -229,8 +228,11 @@ def create_doctor():
 
     if Doctor.query.filter_by(email=data['email']).first():
         return jsonify({'error': 'Email already registered'}), 409
+    if data.get('id') and db.session.get(Doctor, int(data['id'])):
+        return jsonify({'error': 'Doctor already exists'}), 409
 
     doctor = Doctor(
+        id=int(data['id']) if data.get('id') else None,
         name=data['name'], email=data['email'], phone=str(data['phone']),
         department=data['department'], specialization=data['specialization'],
     )
@@ -340,40 +342,9 @@ def delete_slot(doctor_id, slot_id):
     return jsonify({'message': f'Slot {slot_id} deleted'})
 
 # ── Seed ──────────────────────────────────────────────────────────────────────
-def seed_data():
-    if Doctor.query.count() > 0:
-        return
-    csv_dir = os.environ.get(
-        'CSV_DIR',
-        os.path.join(os.path.dirname(__file__), '..', '..', 'doc', 'HMS Dataset (1)')
-    )
-    csv_path = os.path.join(csv_dir, 'hms_doctors_indian.csv')
-    if not os.path.exists(csv_path):
-        logger.warning('seed_skipped', extra={'reason': f'CSV not found: {csv_path}'})
-        return
-    with open(csv_path, newline='', encoding='utf-8') as f:
-        for row in csv.DictReader(f):
-            try:
-                created = datetime.fromisoformat(row['created_at'])
-            except (ValueError, KeyError):
-                created = datetime.utcnow()
-            db.session.execute(text(
-                "INSERT OR IGNORE INTO doctors"
-                " (id, name, email, phone, department, specialization, created_at)"
-                " VALUES (:id, :name, :email, :phone, :department, :specialization, :created_at)"
-            ), {
-                'id': int(row['doctor_id']), 'name': row['name'],
-                'email': row['email'], 'phone': row['phone'],
-                'department': row['department'], 'specialization': row['specialization'],
-                'created_at': created.isoformat(),
-            })
-    db.session.commit()
-    logger.info('seed_complete', extra={'table': 'doctors'})
-
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        seed_data()
     port = int(os.environ.get('PORT', 5002))
     app.run(host='0.0.0.0', port=port, debug=False)

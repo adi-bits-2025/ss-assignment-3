@@ -8,7 +8,7 @@ import requests
 
 BASE = {
     'patient': os.environ.get('PATIENT_SERVICE_URL', 'http://localhost:5001'),
-    'doctor': os.environ.get('DOCTOR_SERVICE_URL', 'http://localhost:5002'),
+    'doctor': os.environ.get('DOCTOR_SCHEDULE_SERVICE_URL', 'http://localhost:5002'),
     'appointment': os.environ.get('APPOINTMENT_SERVICE_URL',  'http://localhost:5003',),
     'prescription': os.environ.get('PRESCRIPTION_SERVICE_URL', 'http://localhost:5004',),
     'billing': os.environ.get('BILLING_SERVICE_URL', 'http://localhost:5005'),
