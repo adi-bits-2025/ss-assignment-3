@@ -578,11 +578,11 @@ def complete_appointment(appt_id):
     db.session.commit()
     logger.info('appointment_completed', extra={'appointment_id': appt_id, 'version': appt.version})
 
-    _trigger_billing(appt, bill_type='completion')
+    # _trigger_billing(appt, bill_type='completion') # Disabled per user request (manual UI billing instead)
 
     return jsonify({
         **appt.to_dict(),
-        'message': 'Appointment marked COMPLETED. Billing has been triggered.',
+        'message': 'Appointment marked COMPLETED.',
     })
 
 

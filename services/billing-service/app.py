@@ -171,7 +171,7 @@ def _active_bill_for_appointment(appointment_id):
 @app.route('/bills', methods=['POST'])
 def create_bill():
     data = request.get_json(force=True) or {}
-    missing = [f for f in ('patient_id', 'appointment_id') if not data.get(f)]
+    missing = [f for f in ('appointment_id',) if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
 
@@ -216,7 +216,11 @@ def create_bill():
             'error': f"Bill can only be created for COMPLETED appointments. Current status: {appt_status}"
         }), 409
 
-    ok, err = _verify_patient(data['patient_id'])
+    patient_id = appt_data.get('patient_id')
+    if not patient_id:
+        return jsonify({'error': 'Appointment data missing patient_id'}), 500
+
+    ok, err = _verify_patient(patient_id)
     if not ok:
         return jsonify({'error': err}), 404 if 'not found' in err else 503
 
@@ -225,7 +229,7 @@ def create_bill():
     t0   = time.time()
     bill = Bill(
         id=int(data['id']) if data.get('id') else None,
-        patient_id=int(data['patient_id']),
+        patient_id=int(patient_id),
         appointment_id=int(data['appointment_id']),
         consultation_fee=consultation_fee,
         medication_cost=medication_cost,

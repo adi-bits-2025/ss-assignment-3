@@ -189,6 +189,7 @@ function App() {
   const [prescriptions, setPrescriptions] = useState([]);
   const [appointmentForBilling, setAppointmentForBilling] = useState(null);
   const [cancellationCharges, setCancellationCharges] = useState(null);
+  const [retrievedRx, setRetrievedRx] = useState(null);
 
   const billTotal = useMemo(() => {
     const subtotal = Number(billingForm.consultation) + Number(billingForm.medication);
@@ -483,13 +484,14 @@ function App() {
     }
   }
 
-  async function checkAppointmentStatusForBilling() {
-    if (!billingForm.appointmentId) {
+  async function checkAppointmentStatusForBilling(appId) {
+    const targetId = typeof appId === 'string' || typeof appId === 'number' ? appId : billingForm.appointmentId;
+    if (!targetId) {
       setAppointmentForBilling(null);
       setCancellationCharges(null);
       return;
     }
-    const result = await requestApi('appointment', `/appointments/${billingForm.appointmentId}`).catch(() => null);
+    const result = await requestApi('appointment', `/appointments/${targetId}`).catch(() => null);
     if (result?.ok) {
       setAppointmentForBilling(result.body);
       if (result.body.status === 'CANCELLED') {
@@ -583,11 +585,9 @@ function App() {
   }
 
   async function createPrescription() {
-    if (!prescriptionForm.appointmentId || !ids.patientId || !ids.doctorId) return;
+    if (!prescriptionForm.appointmentId) return;
     const result = await execute('prescription', 'Create prescription linked to appointment', 'POST', '/prescriptions', {
       appointment_id: Number(prescriptionForm.appointmentId),
-      patient_id: Number(ids.patientId),
-      doctor_id: Number(ids.doctorId),
       medication: prescriptionForm.medication,
       dosage: prescriptionForm.dosage,
       days: Number(prescriptionForm.days)
@@ -600,14 +600,14 @@ function App() {
 
   async function retrievePrescription() {
     if (!ids.prescriptionId) return;
-    await execute('prescription', 'Retrieve prescription', 'GET', `/prescriptions/${ids.prescriptionId}`);
+    const result = await execute('prescription', 'Retrieve prescription', 'GET', `/prescriptions/${ids.prescriptionId}`);
+    if (result.ok) setRetrievedRx(result.body);
+    else setRetrievedRx(null);
   }
 
   async function invalidPrescriptionScenario() {
     const result = await execute('prescription', 'Reject prescription for invalid appointment', 'POST', '/prescriptions', {
       appointment_id: 999999,
-      patient_id: Number(ids.patientId || 1),
-      doctor_id: Number(ids.doctorId || 1),
       medication: prescriptionForm.medication,
       dosage: prescriptionForm.dosage,
       days: Number(prescriptionForm.days)
@@ -757,6 +757,7 @@ function App() {
               createPrescription={createPrescription}
               retrievePrescription={retrievePrescription}
               invalidPrescriptionScenario={invalidPrescriptionScenario}
+              retrievedRx={retrievedRx}
             />
           )}
           {activeTab === 'payment' && (
@@ -1151,7 +1152,7 @@ function BillingTab(props) {
       />
       {section === 'generate' && <Section title="Generate Bill With Tax Calculation" icon={Banknote}>
         <div className="form-grid">
-          <Field label="Appointment ID" value={form.appointmentId} onChange={(v) => { update('appointmentId')(v); setTimeout(checkAppointmentStatusForBilling, 100); }} />
+          <Field label="Appointment ID" value={form.appointmentId} onChange={(v) => { update('appointmentId')(v); checkAppointmentStatusForBilling(v); }} />
           {appointmentForBilling && (
             <label className="field"><span>Appointment Status</span><input value={appointmentForBilling.status} readOnly style={{ color: appointmentForBilling.status === 'CANCELLED' ? '#d32f2f' : '#388e3c', fontWeight: 'bold' }} /></label>
           )}
@@ -1185,7 +1186,7 @@ function BillingTab(props) {
           </div>
         )}
         <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={props.createBill} disabled={!appointmentForBilling || !form.appointmentId || appointmentForBilling?.status === 'CANCELLED'}>Generate bill</ActionButton>
+          <ActionButton icon={CheckCircle2} onClick={props.createBill} disabled={!appointmentForBilling || !form.appointmentId || appointmentForBilling?.status !== 'COMPLETED'}>Generate bill</ActionButton>
         </div>
       </Section>}
 
@@ -1223,7 +1224,7 @@ function BillingTab(props) {
 }
 
 function PrescriptionTab(props) {
-  const { form, setForm, ids, prescriptions } = props;
+  const { form, setForm, ids, prescriptions, retrievedRx } = props;
   const [section, setSection] = useState('create');
   const update = (key) => (value) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -1250,6 +1251,19 @@ function PrescriptionTab(props) {
           <ActionButton icon={Search} onClick={props.retrievePrescription} disabled={!ids.prescriptionId}>Retrieve prescription</ActionButton>
           <ActionButton icon={AlertTriangle} variant="warning" onClick={props.invalidPrescriptionScenario}>Invalid appointment scenario</ActionButton>
         </div>
+        {retrievedRx && (
+          <div style={{ marginTop: '16px', padding: '16px', backgroundColor: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '6px' }}>
+            <h4 style={{ margin: '0 0 12px 0', color: '#334155' }}>Prescription #{retrievedRx.id}</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '13px' }}>
+              <div><strong>Patient ID:</strong> {retrievedRx.patient_id}</div>
+              <div><strong>Doctor ID:</strong> {retrievedRx.doctor_id}</div>
+              <div><strong>Medication:</strong> {retrievedRx.medication}</div>
+              <div><strong>Dosage:</strong> {retrievedRx.dosage}</div>
+              <div><strong>Duration:</strong> {retrievedRx.days} days</div>
+              <div><strong>Issued:</strong> {new Date(retrievedRx.created_at || Date.now()).toLocaleDateString()}</div>
+            </div>
+          </div>
+        )}
       </Section>}
       {section === 'records' && <Section title="Prescription Records" icon={ClipboardList}>
         <DataTable

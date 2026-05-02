@@ -181,7 +181,7 @@ def _verify_appointment(appointment_id):
 @app.route('/prescriptions', methods=['POST'])
 def create_prescription():
     data = request.get_json(force=True) or {}
-    missing = [f for f in ('appointment_id', 'patient_id', 'doctor_id', 'medication', 'dosage', 'days')
+    missing = [f for f in ('appointment_id', 'medication', 'dosage', 'days')
                if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
@@ -214,8 +214,8 @@ def create_prescription():
     rx = Prescription(
         id=int(data['id']) if data.get('id') else None,
         appointment_id=int(data['appointment_id']),
-        patient_id=int(data['patient_id']),
-        doctor_id=int(data['doctor_id']),
+        patient_id=int(appt.get('patient_id')),
+        doctor_id=int(appt.get('doctor_id')),
         medication=data['medication'],
         dosage=data['dosage'],
         days=days,

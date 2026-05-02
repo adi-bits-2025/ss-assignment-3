@@ -94,9 +94,14 @@ app.all(/^\/api\/([^/]+)\/(.+)$/, async (req, res) => {
   }
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (req.headers['idempotency-key']) {
+      headers['Idempotency-Key'] = req.headers['idempotency-key'];
+    }
+
     const upstream = await fetch(upstreamUrl, {
       method: req.method,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body || {})
     });
 
