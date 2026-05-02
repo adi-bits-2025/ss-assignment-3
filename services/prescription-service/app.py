@@ -194,8 +194,15 @@ def create_prescription():
         code = 404 if 'not found' in err else 503
         return jsonify({'error': err}), code
 
-    if appt.get('status') not in ('SCHEDULED', 'COMPLETED'):
-        return jsonify({'error': 'Prescriptions can only be issued for active appointments'}), 409
+    # Prescriptions can only be issued after the appointment has been COMPLETED.
+    # A SCHEDULED appointment means the consultation hasn't happened yet.
+    if appt.get('status') != 'COMPLETED':
+        return jsonify({
+            'error': (
+                f"Prescriptions can only be issued for COMPLETED appointments "
+                f"(current status: {appt.get('status')})"
+            )
+        }), 409
 
     try:
         days = int(data['days'])

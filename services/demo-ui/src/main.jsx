@@ -425,15 +425,29 @@ function App() {
     }
   }
 
-  async function updateAppointmentStatus(status) {
+  async function completeAppointment() {
     if (!ids.appointmentId) return;
-    const result = await execute('appointment', `${status.toLowerCase()} appointment`, 'PATCH', `/appointments/${ids.appointmentId}/status`, {
-      status
-    });
+    const result = await execute('appointment', 'Complete appointment', 'POST', `/appointments/${ids.appointmentId}/complete`, {});
     if (result.ok) {
-      addEvent('notification', 'info', `${status} appointment alert`, `Notification event prepared for appointment status ${status}.`, {
-        appointmentId: ids.appointmentId
-      });
+      addEvent('notification', 'info', 'Completion notification', 'Appointment marked COMPLETED. Billing has been triggered.', { appointmentId: ids.appointmentId });
+      refreshLists();
+    }
+  }
+
+  async function cancelAppointment() {
+    if (!ids.appointmentId) return;
+    const result = await execute('appointment', 'Cancel appointment', 'POST', `/appointments/${ids.appointmentId}/cancel`, {});
+    if (result.ok) {
+      addEvent('notification', 'info', 'Cancellation notification', `Policy: ${result.body?.cancellation_policy}. Charge: ${(result.body?.charge_pct ?? 0) * 100}%.`, result.body);
+      refreshLists();
+    }
+  }
+
+  async function noshowAppointment() {
+    if (!ids.appointmentId) return;
+    const result = await execute('appointment', 'Mark NO_SHOW', 'POST', `/appointments/${ids.appointmentId}/noshow`, {});
+    if (result.ok) {
+      addEvent('notification', 'info', 'No-show notification', 'Full consultation fee charged. Billing triggered.', { appointmentId: ids.appointmentId });
       refreshLists();
     }
   }
@@ -605,17 +619,30 @@ function App() {
 
   async function chargePayment(repeat = false) {
     if (!paymentForm.billId) return;
-    const paymentId = repeat ? ids.paymentId : Number(Date.now().toString().slice(-6));
-    const result = await execute('billing', repeat ? 'Repeat same idempotent payment' : 'Charge payment with idempotency key', 'POST', `/bills/${paymentForm.billId}/payments`, {
-      id: Number(paymentId),
-      amount: Number(paymentForm.amount),
-      method: paymentForm.method
-    });
-    if (result.ok && !repeat) {
-      setIds((current) => ({ ...current, paymentId }));
-    }
-    if (!result.ok && repeat) {
-      addEvent('payment', 'success', 'Duplicate charge prevention demonstrated', 'The repeated payment key did not create a second payment record.', result.body);
+    const key = paymentForm.idempotencyKey || `pay-${uid()}`;
+    // Use /payments/charge with Idempotency-Key header as per spec
+    try {
+      const response = await fetch(`/api/billing/v1/payments/charge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+        body: JSON.stringify({ bill_id: Number(paymentForm.billId), amount: Number(paymentForm.amount), method: paymentForm.method })
+      });
+      const body = await response.json().catch(() => null);
+      const result = { ok: response.ok, status: response.status, body, method: 'POST', path: '/v1/payments/charge' };
+      setLastResponse({ title: repeat ? 'Repeat idempotent charge' : 'Charge payment', ...result });
+      if (result.ok && !repeat) {
+        setIds((current) => ({ ...current, paymentId: body?.id }));
+        addEvent('billing', 'success', 'Payment charged', `Bill ${paymentForm.billId} charged ${paymentForm.amount} via ${paymentForm.method}. Key: ${key}`, body);
+      } else if (result.ok && repeat) {
+        addEvent('billing', body?.idempotent_replay ? 'success' : 'info',
+          body?.idempotent_replay ? 'Idempotent replay confirmed' : 'Payment processed',
+          body?.idempotent_replay ? 'Same Idempotency-Key returned the existing payment — no duplicate created.' : 'Payment recorded.',
+          body);
+      } else {
+        addEvent('billing', 'error', 'Payment failed', body?.error || `Status ${result.status}`, body);
+      }
+    } catch (err) {
+      addEvent('billing', 'error', 'Payment request failed', err.message);
     }
     refreshLists();
   }
@@ -684,6 +711,7 @@ function App() {
               form={doctorForm}
               setForm={setDoctorForm}
               ids={ids}
+              setIds={setIds}
               doctors={doctors}
               createDoctor={createDoctor}
               filterDoctors={filterDoctors}
@@ -695,10 +723,13 @@ function App() {
               form={appointmentForm}
               setForm={setAppointmentForm}
               ids={ids}
+              setIds={setIds}
               appointments={appointments}
               bookAppointment={bookAppointment}
               rescheduleAppointment={rescheduleAppointment}
-              updateAppointmentStatus={updateAppointmentStatus}
+              completeAppointment={completeAppointment}
+              cancelAppointment={cancelAppointment}
+              noshowAppointment={noshowAppointment}
               demonstrateAppointmentConflict={demonstrateAppointmentConflict}
             />
           )}
@@ -908,7 +939,7 @@ function PatientTab(props) {
 }
 
 function DoctorTab(props) {
-  const { form, setForm, ids, doctors } = props;
+  const { form, setForm, ids, setIds, doctors } = props;
   const [section, setSection] = useState('listing');
   const update = (key) => (value) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -941,7 +972,9 @@ function DoctorTab(props) {
             { key: 'id', label: 'ID' },
             { key: 'name', label: 'Doctor' },
             { key: 'department', label: 'Department' },
-            { key: 'specialization', label: 'Specialization' }
+            { key: 'specialization', label: 'Specialization' },
+            { key: 'is_active', label: 'Active', render: (row) => row.is_active ? '✅ Yes' : '❌ No' },
+            { key: 'max_appointments_per_day', label: 'Daily Cap' }
           ]}
         />
       </Section>}
@@ -951,19 +984,24 @@ function DoctorTab(props) {
           <Field label="Slot start" type="datetime-local" value={form.slotStart} onChange={update('slotStart')} />
           <Field label="Slot end" type="datetime-local" value={form.slotEnd} onChange={update('slotEnd')} />
           <label className="field">
-            <span>Current doctor ID</span>
-            <input value={ids.doctorId || 'Create doctor first'} readOnly />
+            <span>Doctor ID <em style={{fontSize:'0.8em',color:'#888'}}>(editable)</em></span>
+            <input
+              type="number"
+              value={ids.doctorId || ''}
+              onChange={(e) => setIds((prev) => ({ ...prev, doctorId: e.target.value }))}
+              placeholder="Enter or paste doctor ID"
+            />
           </label>
         </div>
-        <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={() => props.createDoctorSlot(true)} disabled={!ids.doctorId}>Create valid slot</ActionButton>
-          <ActionButton icon={AlertTriangle} variant="warning" onClick={() => props.createDoctorSlot(false)} disabled={!ids.doctorId}>Demonstrate invalid slot</ActionButton>
-        </div>
         <ul className="rule-list">
-          <li>Fixed slot interval: 30 minutes.</li>
-          <li>Clinic-hour and capacity policies are shown as submission guardrails.</li>
-          <li>Invalid time ordering is rejected by the service.</li>
+          <li>Fixed slot interval: exactly <strong>30 minutes</strong>. Service rejects any other duration.</li>
+          <li>Slots must fall within clinic hours: <strong>10:00 AM – 7:00 PM</strong>.</li>
+          <li>Only active doctors can receive new slots.</li>
         </ul>
+        <div className="button-row">
+          <ActionButton icon={CheckCircle2} onClick={() => props.createDoctorSlot(true)} disabled={!ids.doctorId}>Create valid slot (30 min)</ActionButton>
+          <ActionButton icon={AlertTriangle} variant="warning" onClick={() => props.createDoctorSlot(false)} disabled={!ids.doctorId}>Demonstrate invalid slot (reversed)</ActionButton>
+        </div>
       </Section>}
     </div>
   );
@@ -981,46 +1019,29 @@ function AppointmentTab(props) {
         onChange={setSection}
         tabs={[
           { id: 'manage', label: 'Book & Status' },
-          { id: 'reschedule', label: 'Reschedule' },
-          { id: 'constraints', label: 'Constraints' }
+          { id: 'reschedule', label: 'Reschedule' }
         ]}
       />
-      {section === 'manage' && <Section title="Book, Complete, And Cancel" icon={CalendarClock}>
+      {section === 'manage' && <Section title="Book, Complete, Cancel & No-Show" icon={CalendarClock}>
         <div className="form-grid">
           <Field label="Patient ID" value={form.patientId} onChange={update('patientId')} />
           <Field label="Doctor ID" value={form.doctorId} onChange={update('doctorId')} />
           <Field label="Department" value={form.department} onChange={update('department')} />
-          <Field label="Slot start" type="datetime-local" value={form.slotStart} onChange={update('slotStart')} />
-          <Field label="Slot end" type="datetime-local" value={form.slotEnd} onChange={update('slotEnd')} />
+          <Field label="Slot start (≥ 2h from now, 10AM–7PM)" type="datetime-local" value={form.slotStart} onChange={update('slotStart')} />
+          <Field label="Slot end (must be exactly 30 min after start)" type="datetime-local" value={form.slotEnd} onChange={update('slotEnd')} />
           <label className="field"><span>Appointment ID</span><input value={ids.appointmentId || 'Not booked'} readOnly /></label>
         </div>
-        <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={props.bookAppointment} disabled={!form.patientId || !form.doctorId}>Book appointment</ActionButton>
-          <ActionButton icon={Activity} onClick={() => props.updateAppointmentStatus('COMPLETED')} disabled={!ids.appointmentId}>Mark completed</ActionButton>
-          <ActionButton icon={XCircle} variant="danger" onClick={() => props.updateAppointmentStatus('CANCELLED')} disabled={!ids.appointmentId}>Cancel appointment</ActionButton>
-        </div>
-      </Section>}
-
-      {section === 'reschedule' && <Section title="Reschedule Rules" icon={RefreshCcw}>
-        <div className="form-grid compact">
-          <Field label="New slot start" type="datetime-local" value={form.rescheduleStart} onChange={update('rescheduleStart')} />
-          <Field label="New slot end" type="datetime-local" value={form.rescheduleEnd} onChange={update('rescheduleEnd')} />
-        </div>
-        <div className="button-row">
-          <ActionButton icon={RefreshCcw} onClick={props.rescheduleAppointment} disabled={!ids.appointmentId}>Reschedule</ActionButton>
-        </div>
-        <ul className="rule-list">
-          <li>Maximum reschedules per appointment: 2.</li>
-          <li>Reschedule blocked within 1 hour of the scheduled slot.</li>
-          <li>Version increment is recorded as a workflow requirement.</li>
+        <ul className="rule-list" style={{marginBottom: '8px'}}>
+          <li>Slot must be <strong>exactly 30 min</strong>, within <strong>10 AM – 7 PM</strong>, and at least <strong>2 hours ahead</strong>.</li>
+          <li>Patient and doctor must both be <strong>active</strong>. Doctor department must <strong>match</strong>.</li>
+          <li><strong>Cancel &gt; 2h</strong> before slot → full refund. <strong>Cancel ≤ 2h</strong> → 50% charge.</li>
+          <li><strong>No-show</strong> can only be recorded after the 15-minute grace period.</li>
         </ul>
-      </Section>}
-
-      {section === 'constraints' && <Section title="Constraint And Conflict Detection Scenario" icon={AlertTriangle}>
         <div className="button-row">
-          <ActionButton icon={AlertTriangle} variant="warning" onClick={props.demonstrateAppointmentConflict} disabled={!form.patientId || !form.doctorId}>
-            Run overlap scenario
-          </ActionButton>
+          <ActionButton icon={CheckCircle2} onClick={props.bookAppointment} disabled={!form.patientId || !form.doctorId}>Book</ActionButton>
+          <ActionButton icon={Activity} onClick={props.completeAppointment} disabled={!ids.appointmentId}>Complete</ActionButton>
+          <ActionButton icon={XCircle} variant="danger" onClick={props.cancelAppointment} disabled={!ids.appointmentId}>Cancel</ActionButton>
+          <ActionButton icon={AlertTriangle} variant="warning" onClick={props.noshowAppointment} disabled={!ids.appointmentId}>No-Show</ActionButton>
         </div>
         <DataTable
           rows={appointments}
@@ -1028,10 +1049,29 @@ function AppointmentTab(props) {
             { key: 'id', label: 'ID' },
             { key: 'patient_id', label: 'Patient' },
             { key: 'doctor_id', label: 'Doctor' },
+            { key: 'department', label: 'Dept' },
             { key: 'status', label: 'Status' },
-            { key: 'slot_start', label: 'Start' }
+            { key: 'reschedule_count', label: 'Reschedules' },
+            { key: 'version', label: 'Version' },
+            { key: 'slot_start', label: 'Slot Start' }
           ]}
         />
+      </Section>}
+
+      {section === 'reschedule' && <Section title="Reschedule Rules" icon={RefreshCcw}>
+        <div className="form-grid compact">
+          <Field label="New slot start" type="datetime-local" value={form.rescheduleStart} onChange={update('rescheduleStart')} />
+          <Field label="New slot end" type="datetime-local" value={form.rescheduleEnd} onChange={update('rescheduleEnd')} />
+        </div>
+        <ul className="rule-list">
+          <li>Maximum reschedules per appointment: <strong>2</strong>.</li>
+          <li>Reschedule blocked within <strong>1 hour</strong> of the current scheduled slot.</li>
+          <li>New slot must also satisfy clinic hours, 30-min duration, and 2h lead time.</li>
+          <li><code>version</code> is incremented on every reschedule (optimistic locking).</li>
+        </ul>
+        <div className="button-row">
+          <ActionButton icon={RefreshCcw} onClick={props.rescheduleAppointment} disabled={!ids.appointmentId}>Reschedule</ActionButton>
+        </div>
       </Section>}
     </div>
   );
@@ -1196,14 +1236,19 @@ function PaymentNotificationTab(props) {
             options={[
               { value: 'CARD', label: 'CARD' },
               { value: 'UPI', label: 'UPI' },
-              { value: 'CASH', label: 'CASH' }
+              { value: 'CASH', label: 'CASH' },
+              { value: 'INSURANCE', label: 'INSURANCE' }
             ]}
           />
-          <Field label="Idempotency key" value={form.idempotencyKey} onChange={update('idempotencyKey')} />
+          <Field label="Idempotency-Key (sent as header)" value={form.idempotencyKey} onChange={update('idempotencyKey')} />
         </div>
+        <ul className="rule-list" style={{marginBottom:'8px'}}>
+          <li>Uses <code>POST /payments/charge</code> with <strong>Idempotency-Key</strong> header.</li>
+          <li>Repeating the same key returns the existing payment — <strong>no duplicate</strong> created.</li>
+        </ul>
         <div className="button-row">
           <ActionButton icon={CheckCircle2} onClick={() => props.chargePayment(false)} disabled={!form.billId}>Charge payment</ActionButton>
-          <ActionButton icon={ShieldCheck} variant="warning" onClick={() => props.chargePayment(true)} disabled={!form.billId || !ids.paymentId}>Repeat same key</ActionButton>
+          <ActionButton icon={ShieldCheck} variant="warning" onClick={() => props.chargePayment(true)} disabled={!form.billId}>Repeat same key (idempotency test)</ActionButton>
         </div>
       </Section>}
 

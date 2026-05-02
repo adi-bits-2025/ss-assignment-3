@@ -33,6 +33,11 @@ with app.app_context():
         cursor.execute('PRAGMA busy_timeout=30000')
         cursor.close()
 
+# ── Clinic-hours constants ─────────────────────────────────────────────────────
+CLINIC_OPEN  = dt_time(10, 0)   # 10:00 AM
+CLINIC_CLOSE = dt_time(19, 0)   # 07:00 PM
+SLOT_DURATION_MINUTES = 30       # Fixed slot interval
+
 # ── JSON Logging ──────────────────────────────────────────────────────────────
 def _mask_email(val):
     if not val or '@' not in str(val):
@@ -169,10 +174,18 @@ def swagger_json():
                     'responses': {'200': {'description': 'Updated'}, '404': {'description': 'Not found'}}
                 },
                 'delete': {
-                    'summary': 'Delete doctor',
+                    'summary': 'Deactivate doctor (soft-delete)',
                     'parameters': [{'name': 'doctor_id', 'in': 'path', 'required': True,
                                     'schema': {'type': 'integer'}}],
-                    'responses': {'200': {'description': 'Deleted'}, '404': {'description': 'Not found'}}
+                    'responses': {'200': {'description': 'Deactivated'}, '404': {'description': 'Not found'}}
+                }
+            },
+            '/doctors/{doctor_id}/activate': {
+                'patch': {
+                    'summary': 'Reactivate a deactivated doctor',
+                    'parameters': [{'name': 'doctor_id', 'in': 'path', 'required': True,
+                                    'schema': {'type': 'integer'}}],
+                    'responses': {'200': {'description': 'Activated'}, '404': {'description': 'Not found'}}
                 }
             },
             '/doctors/{doctor_id}/slots': {
@@ -183,7 +196,7 @@ def swagger_json():
                     'responses': {'200': {'description': 'OK'}, '404': {'description': 'Not found'}}
                 },
                 'post': {
-                    'summary': 'Add doctor slot',
+                    'summary': 'Add doctor slot (must be within clinic hours, 30-min fixed)',
                     'parameters': [{'name': 'doctor_id', 'in': 'path', 'required': True,
                                     'schema': {'type': 'integer'}}],
                     'requestBody': {
@@ -231,10 +244,20 @@ def create_doctor():
     if data.get('id') and db.session.get(Doctor, int(data['id'])):
         return jsonify({'error': 'Doctor already exists'}), 409
 
+    max_appts = data.get('max_appointments_per_day', 20)
+    try:
+        max_appts = int(max_appts)
+        if max_appts <= 0:
+            raise ValueError
+    except (ValueError, TypeError):
+        return jsonify({'error': 'max_appointments_per_day must be a positive integer'}), 400
+
     doctor = Doctor(
         id=int(data['id']) if data.get('id') else None,
         name=data['name'], email=data['email'], phone=str(data['phone']),
         department=data['department'].strip(), specialization=data['specialization'],
+        is_active=True,
+        max_appointments_per_day=max_appts,
     )
     db.session.add(doctor)
     db.session.commit()
@@ -248,12 +271,16 @@ def create_doctor():
 @app.route('/doctors', methods=['GET'])
 def list_doctors():
     dept = request.args.get('department')
+    active_param = request.args.get('active')
     page = request.args.get('page', 1, type=int)
     pageSize = request.args.get('pageSize', type=int)
     q = Doctor.query
     if dept:
         dept = dept.strip()
         q = q.filter(func.lower(Doctor.department) == func.lower(dept))
+    if active_param is not None:
+        q = q.filter_by(is_active=(active_param.lower() == 'true'))
+    if dept:
         doctors = q.all()
         return jsonify({
             'items': [d.to_dict() for d in doctors],
@@ -302,18 +329,48 @@ def update_doctor(doctor_id):
         if existing and existing.id != doctor_id:
             return jsonify({'error': 'Email already in use'}), 409
         doctor.email = data['email']
+    if 'max_appointments_per_day' in data:
+        try:
+            val = int(data['max_appointments_per_day'])
+            if val <= 0:
+                raise ValueError
+            doctor.max_appointments_per_day = val
+        except (ValueError, TypeError):
+            return jsonify({'error': 'max_appointments_per_day must be a positive integer'}), 400
+
+    doctor.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify(doctor.to_dict())
 
 
 @app.route('/doctors/<int:doctor_id>', methods=['DELETE'])
-def delete_doctor(doctor_id):
+def deactivate_doctor(doctor_id):
+    """Soft-delete: marks doctor as inactive, preserving history."""
     doctor = db.session.get(Doctor, doctor_id)
     if not doctor:
         return jsonify({'error': 'Doctor not found'}), 404
-    db.session.delete(doctor)
+    if not doctor.is_active:
+        return jsonify({'error': 'Doctor is already inactive'}), 409
+    doctor.is_active = False
+    doctor.updated_at = datetime.utcnow()
     db.session.commit()
-    return jsonify({'message': f'Doctor {doctor_id} deleted'})
+    logger.info('doctor_deactivated', extra={'doctor_id': doctor_id})
+    return jsonify({'message': f'Doctor {doctor_id} deactivated', **doctor.to_dict()})
+
+
+@app.route('/doctors/<int:doctor_id>/activate', methods=['PATCH'])
+def activate_doctor(doctor_id):
+    """Re-activate a previously deactivated doctor."""
+    doctor = db.session.get(Doctor, doctor_id)
+    if not doctor:
+        return jsonify({'error': 'Doctor not found'}), 404
+    if doctor.is_active:
+        return jsonify({'error': 'Doctor is already active'}), 409
+    doctor.is_active = True
+    doctor.updated_at = datetime.utcnow()
+    db.session.commit()
+    logger.info('doctor_activated', extra={'doctor_id': doctor_id})
+    return jsonify({'message': f'Doctor {doctor_id} activated', **doctor.to_dict()})
 
 # ── Slot Routes ───────────────────────────────────────────────────────────────
 @app.route('/doctors/<int:doctor_id>/slots', methods=['POST'])
@@ -321,6 +378,8 @@ def add_slot(doctor_id):
     doctor = db.session.get(Doctor, doctor_id)
     if not doctor:
         return jsonify({'error': 'Doctor not found'}), 404
+    if not doctor.is_active:
+        return jsonify({'error': 'Cannot add slots for an inactive doctor'}), 409
 
     data = request.get_json(force=True) or {}
     missing = [f for f in ('slot_start', 'slot_end') if not data.get(f)]
@@ -336,13 +395,24 @@ def add_slot(doctor_id):
     if slot_end <= slot_start:
         return jsonify({'error': 'slot_end must be after slot_start'}), 400
 
-    # Validate clinic hours: 10 AM - 7 PM
-    clinic_open = dt_time(10, 0)
-    clinic_close = dt_time(19, 0)
-    if slot_start.time() < clinic_open or slot_end.time() > clinic_close:
-        return jsonify({'error': 'Slot must be within clinic hours 10 AM - 7 PM'}), 400
+    # Enforce minimum 30-minute slot duration and multiples of 30
+    duration_minutes = (slot_end - slot_start).total_seconds() / 60
+    if duration_minutes < SLOT_DURATION_MINUTES:
+        return jsonify({
+            'error': f'Slot duration must be at least {SLOT_DURATION_MINUTES} minutes'
+        }), 400
+    if duration_minutes % SLOT_DURATION_MINUTES != 0:
+        return jsonify({
+            'error': f'Slot duration must be a multiple of {SLOT_DURATION_MINUTES} minutes (e.g. 30, 60, 90)'
+        }), 400
 
-    # Check for overlapping slots
+    # Validate clinic hours: 10 AM – 7 PM
+    if slot_start.time() < CLINIC_OPEN or slot_end.time() > CLINIC_CLOSE:
+        return jsonify({
+            'error': f'Slot must be within clinic hours {CLINIC_OPEN.strftime("%I:%M %p")} – {CLINIC_CLOSE.strftime("%I:%M %p")}'
+        }), 400
+
+    # Check for overlapping slots for this doctor
     existing_slots = DoctorSlot.query.filter_by(doctor_id=doctor_id).all()
     for existing in existing_slots:
         if not (slot_end <= existing.slot_start or slot_start >= existing.slot_end):
@@ -378,7 +448,6 @@ def delete_slot(doctor_id, slot_id):
     db.session.commit()
     return jsonify({'message': f'Slot {slot_id} deleted'})
 
-# ── Seed ──────────────────────────────────────────────────────────────────────
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     with app.app_context():

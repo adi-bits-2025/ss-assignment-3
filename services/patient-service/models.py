@@ -12,7 +12,9 @@ class Patient(db.Model):
     email      = db.Column(db.String(120), unique=True, nullable=False)
     phone      = db.Column(db.String(20), nullable=False)
     dob        = db.Column(db.Date, nullable=True)
+    is_active  = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def to_dict(self):
         return {
@@ -21,5 +23,7 @@ class Patient(db.Model):
             'email':      self.email,
             'phone':      self.phone,
             'dob':        self.dob.isoformat() if self.dob else None,
+            'is_active':  self.is_active,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -79,11 +79,19 @@ def unique_email(row, email_counts, id_field):
     return f"{local}+{row[id_field]}@{domain}"
 
 
-def fixed_slot(row):
-    slot_start = datetime.fromisoformat(row['slot_start'])
-    slot_end = datetime.fromisoformat(row['slot_end'])
-    if slot_end <= slot_start:
-        slot_end = slot_start + timedelta(minutes=30)
+def fixed_slot(index):
+    # Start tomorrow at 10:00:00 UTC
+    now = datetime.utcnow()
+    tomorrow = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    
+    slots_per_day = 18 # 10:00 to 19:00 is 9 hours, so 18 slots of 30 mins
+    
+    days_to_add = index // slots_per_day
+    slots_to_add = index % slots_per_day
+    
+    slot_start = tomorrow + timedelta(days=days_to_add, minutes=slots_to_add * 30)
+    slot_end = slot_start + timedelta(minutes=30)
+    
     return slot_start.isoformat(), slot_end.isoformat()
 
 
@@ -133,18 +141,20 @@ def seed_appointments():
     rows = read_csv('hms_appointments_indian.csv')
     ok = 0
     fixed = 0
+    
+    doctors = read_csv('hms_doctors_indian.csv')
+    doc_depts = {row['doctor_id']: row['department'] for row in doctors}
 
-    for row in rows:
-        slot_start, slot_end = fixed_slot(row)
-        fixed += int(slot_end != datetime.fromisoformat(row['slot_end']).isoformat())
+    for i, row in enumerate(rows):
+        slot_start, slot_end = fixed_slot(i)
+        fixed += 1
         payload = {
             'id': int(row['appointment_id']),
             'patient_id': int(row['patient_id']),
             'doctor_id': int(row['doctor_id']),
-            'department': row['department'],
+            'department': doc_depts.get(row['doctor_id'], row['department']),
             'slot_start': slot_start,
             'slot_end': slot_end,
-            'status': row.get('status') or 'SCHEDULED',
         }
         if post(
             f"{SERVICES['appointment']}/appointments",
@@ -152,6 +162,14 @@ def seed_appointments():
             f"appt={row['appointment_id']} patient={row['patient_id']}",
         ):
             ok += 1
+            # Update status using generic PATCH to avoid triggering auto-billing
+            target_status = row.get('status', 'SCHEDULED').upper()
+            if target_status != 'SCHEDULED':
+                post(
+                    f"{SERVICES['appointment']}/appointments/{row['appointment_id']}/status",
+                    {'status': target_status},
+                    f"appt_status={row['appointment_id']} to {target_status}"
+                )
 
     print(f"  Done: {ok}/{len(rows)} appointments ({fixed} slot_end values fixed)\n")
 
@@ -206,6 +224,7 @@ def seed_payments():
             'id': int(row['payment_id']),
             'amount': float(row['amount']),
             'method': row.get('method', 'CASH').upper(),
+            'idempotency_key': f"seed-pay-{row['payment_id']}"
         }
         if post(f"{SERVICES['billing']}/bills/{int(row['bill_id'])}/payments", payload, f"payment={row['payment_id']}"):
             ok += 1

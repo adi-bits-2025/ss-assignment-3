@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
@@ -168,10 +168,18 @@ def swagger_json():
                     'responses': {'200': {'description': 'Updated'}, '404': {'description': 'Not found'}}
                 },
                 'delete': {
-                    'summary': 'Delete patient',
+                    'summary': 'Deactivate patient (soft-delete)',
                     'parameters': [{'name': 'patient_id', 'in': 'path', 'required': True,
                                     'schema': {'type': 'integer'}}],
-                    'responses': {'200': {'description': 'Deleted'}, '404': {'description': 'Not found'}}
+                    'responses': {'200': {'description': 'Deactivated'}, '404': {'description': 'Not found'}}
+                }
+            },
+            '/patients/{patient_id}/activate': {
+                'patch': {
+                    'summary': 'Reactivate a deactivated patient',
+                    'parameters': [{'name': 'patient_id', 'in': 'path', 'required': True,
+                                    'schema': {'type': 'integer'}}],
+                    'responses': {'200': {'description': 'Activated'}, '404': {'description': 'Not found'}}
                 }
             }
         }
@@ -206,6 +214,7 @@ def create_patient():
         id=int(data['id']) if data.get('id') else None,
         name=data['name'], email=data['email'],
         phone=str(data['phone']), dob=dob,
+        is_active=True,
     )
     db.session.add(patient)
     db.session.commit()
@@ -218,7 +227,12 @@ def create_patient():
 
 @app.route('/patients', methods=['GET'])
 def list_patients():
-    return jsonify([p.to_dict() for p in Patient.query.all()])
+    q = Patient.query
+    # Support ?active=true/false filter
+    active_param = request.args.get('active')
+    if active_param is not None:
+        q = q.filter_by(is_active=(active_param.lower() == 'true'))
+    return jsonify([p.to_dict() for p in q.all()])
 
 
 @app.route('/patients/<int:patient_id>', methods=['GET'])
@@ -251,20 +265,40 @@ def update_patient(patient_id):
         except ValueError:
             return jsonify({'error': 'Invalid dob format, expected YYYY-MM-DD'}), 400
 
+    patient.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify(patient.to_dict())
 
 
 @app.route('/patients/<int:patient_id>', methods=['DELETE'])
-def delete_patient(patient_id):
+def deactivate_patient(patient_id):
+    """Soft-delete: marks patient as inactive, preserving history."""
     patient = db.session.get(Patient, patient_id)
     if not patient:
         return jsonify({'error': 'Patient not found'}), 404
-    db.session.delete(patient)
+    if not patient.is_active:
+        return jsonify({'error': 'Patient is already inactive'}), 409
+    patient.is_active = False
+    patient.updated_at = datetime.utcnow()
     db.session.commit()
-    return jsonify({'message': f'Patient {patient_id} deleted'})
+    logger.info('patient_deactivated', extra={'patient_id': patient_id})
+    return jsonify({'message': f'Patient {patient_id} deactivated', **patient.to_dict()})
 
-# ── Seed ──────────────────────────────────────────────────────────────────────
+
+@app.route('/patients/<int:patient_id>/activate', methods=['PATCH'])
+def activate_patient(patient_id):
+    """Re-activate a previously deactivated patient."""
+    patient = db.session.get(Patient, patient_id)
+    if not patient:
+        return jsonify({'error': 'Patient not found'}), 404
+    if patient.is_active:
+        return jsonify({'error': 'Patient is already active'}), 409
+    patient.is_active = True
+    patient.updated_at = datetime.utcnow()
+    db.session.commit()
+    logger.info('patient_activated', extra={'patient_id': patient_id})
+    return jsonify({'message': f'Patient {patient_id} activated', **patient.to_dict()})
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     with app.app_context():
