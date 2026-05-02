@@ -62,7 +62,7 @@ The **Hospital Management System (HMS)** is a microservices-based application th
 ### 4.1 Clone the Consolidated Repository
 
 ```powershell
-git clone https://github.com/adi-bits-2025/ss-assignment-3.git
+git clone https://github.com/2025tm93207-boop/ss-assignment-3.git
 cd ss-assignment-3
 ```
 ---
@@ -277,11 +277,11 @@ minikube stop
 
 | Service | Repository URL |
 |---------|---------------|
-| **Consolidated Repository** | [https://github.com/adi-bits-2025/ss-assignment-3](https://github.com/adi-bits-2025/ss-assignment-3) |
-| Patient Service | [https://github.com/adi-bits-2025/patient-service](https://github.com/adi-bits-2025/patient-service) |
-| Doctor Schedule Service | [https://github.com/adi-bits-2025/doctoer-schedule-service](https://github.com/adi-bits-2025/doctoer-schedule-service) |
+| **Consolidated Repository** | [https://github.com/2025tm93207-boop/ss-assignment-3](https://github.com/2025tm93207-boop/ss-assignment-3) |
+| Patient Service | [https://github.com/2025tm93207-boop/patient-service](https://github.com/2025tm93207-boop/patient-service) |
+| Doctor Schedule Service | [https://github.com/2025tm93207-boop/doctor-schedule-service](https://github.com/2025tm93207-boop/doctor-schedule-service) |
 | Appointment Service | [https://github.com/adi-bits-2025/appointment-service](https://github.com/adi-bits-2025/appointment-service) |
-| Prescription Service | [https://github.com/adi-bits-2025/prescription-service](https://github.com/adi-bits-2025/prescription-service) |
-| Billing Service | [https://github.com/adi-bits-2025/billing-service](https://github.com/adi-bits-2025/billing-service) |
+| Prescription Service | [https://github.com/2025tm93207-boop/prescription-service](https://github.com/2025tm93207-boop/prescription-service) |
+| Billing Service | [https://github.com/2025tm93207-boop/billing-service](https://github.com/2025tm93207-boop/billing-service) |
 
 ---
