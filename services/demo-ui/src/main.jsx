@@ -523,7 +523,8 @@ function App() {
     };
 
     if (apptStatus === 'COMPLETED') {
-      billData.amount = billTotal.total;
+      billData.consultation_fee = Number(billingForm.consultation);
+      billData.medication_cost = Number(billingForm.medication);
     } else if (apptStatus === 'CANCELLED') {
       addEvent(
         'billing',
