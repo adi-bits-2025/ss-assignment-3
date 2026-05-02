@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from datetime import datetime, time
+from datetime import datetime, time as dt_time
 
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
@@ -337,8 +337,8 @@ def add_slot(doctor_id):
         return jsonify({'error': 'slot_end must be after slot_start'}), 400
 
     # Validate clinic hours: 10 AM - 7 PM
-    clinic_open = time(10, 0)
-    clinic_close = time(19, 0)
+    clinic_open = dt_time(10, 0)
+    clinic_close = dt_time(19, 0)
     if slot_start.time() < clinic_open or slot_end.time() > clinic_close:
         return jsonify({'error': 'Slot must be within clinic hours 10 AM - 7 PM'}), 400
 
