@@ -11,7 +11,7 @@ import os
 import sys
 import time
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -61,6 +61,29 @@ def post(url, payload, label):
     return False
 
 
+def patch(url, payload, label):
+    try:
+        response = requests.patch(url, json=payload, timeout=10)
+    except requests.exceptions.RequestException as exc:
+        print(f"    ERROR {label}: {exc}")
+        return False
+
+    if response.status_code == 405:
+        # Some clients, proxies, or environments may not allow PATCH on this endpoint.
+        # Fall back to POST for compatibility with the appointment service status endpoint.
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+        except requests.exceptions.RequestException as exc:
+            print(f"    ERROR {label} fallback POST: {exc}")
+            return False
+
+    if response.status_code in (200, 201, 409):
+        return True
+
+    print(f"    SKIP [{response.status_code}] {label}: {response.text[:160]}")
+    return False
+
+
 def read_csv(filename):
     path = os.path.join(CSV_DIR, filename)
     if not os.path.exists(path):
@@ -81,7 +104,7 @@ def unique_email(row, email_counts, id_field):
 
 def fixed_slot(index):
     # Start tomorrow at 10:00:00 UTC
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     tomorrow = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
     
     slots_per_day = 18 # 10:00 to 19:00 is 9 hours, so 18 slots of 30 mins
@@ -148,6 +171,13 @@ def seed_appointments():
     for i, row in enumerate(rows):
         slot_start, slot_end = fixed_slot(i)
         fixed += 1
+        # First, publish this slot for the doctor so the appointment service accepts it
+        slot_payload = {
+            'slot_start': slot_start,
+            'slot_end': slot_end
+        }
+        post(f"{SERVICES['doctor-schedule']}/doctors/{row['doctor_id']}/slots", slot_payload, f"doc_slot={row['doctor_id']}")
+
         payload = {
             'id': int(row['appointment_id']),
             'patient_id': int(row['patient_id']),
@@ -165,7 +195,7 @@ def seed_appointments():
             # Update status using generic PATCH to avoid triggering auto-billing
             target_status = row.get('status', 'SCHEDULED').upper()
             if target_status != 'SCHEDULED':
-                post(
+                patch(
                     f"{SERVICES['appointment']}/appointments/{row['appointment_id']}/status",
                     {'status': target_status},
                     f"appt_status={row['appointment_id']} to {target_status}"

@@ -1010,7 +1010,30 @@ function DoctorTab(props) {
 function AppointmentTab(props) {
   const { form, setForm, ids, appointments } = props;
   const [section, setSection] = useState('manage');
+  const [doctorSlots, setDoctorSlots] = useState([]);
   const update = (key) => (value) => setForm((current) => ({ ...current, [key]: value }));
+
+  useEffect(() => {
+    if (form.doctorId) {
+      fetch(`/api/doctor-schedule/v1/doctors/${form.doctorId}/slots?available=true`)
+        .then(res => res.json())
+        .then(data => {
+          if (Array.isArray(data)) setDoctorSlots(data);
+          else setDoctorSlots([]);
+        })
+        .catch(() => setDoctorSlots([]));
+    } else {
+      setDoctorSlots([]);
+    }
+  }, [form.doctorId]);
+
+  const selectSlot = (slot) => {
+    setForm(curr => ({
+      ...curr,
+      slotStart: slot.slot_start ? slot.slot_start.slice(0, 16) : curr.slotStart,
+      slotEnd: slot.slot_end ? slot.slot_end.slice(0, 16) : curr.slotEnd
+    }));
+  };
 
   return (
     <div className="tab-stack">
@@ -1031,6 +1054,40 @@ function AppointmentTab(props) {
           <Field label="Slot end (must be exactly 30 min after start)" type="datetime-local" value={form.slotEnd} onChange={update('slotEnd')} />
           <label className="field"><span>Appointment ID</span><input value={ids.appointmentId || 'Not booked'} readOnly /></label>
         </div>
+
+        {form.doctorId && (
+          <div style={{ marginTop: '16px', marginBottom: '16px' }}>
+            <h4 style={{ marginBottom: '8px', fontSize: '14px', color: '#555' }}>Available Slots for Doctor {form.doctorId}</h4>
+            {doctorSlots.length === 0 ? (
+              <p style={{ fontSize: '13px', color: '#888' }}>No published slots available. (Publish slots in Doctor Tab first)</p>
+            ) : (
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                {doctorSlots.map(slot => (
+                  <button 
+                    key={slot.id}
+                    onClick={() => selectSlot(slot)}
+                    style={{
+                      padding: '6px 10px',
+                      background: '#e0f2fe',
+                      border: '1px solid #bae6fd',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      color: '#0369a1',
+                      fontWeight: '500'
+                    }}
+                  >
+                    {new Date(slot.slot_start).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} - {new Date(slot.slot_end).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                    <div style={{ fontSize: '10px', color: '#0ea5e9' }}>
+                      {new Date(slot.slot_start).toLocaleDateString()}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <ul className="rule-list" style={{marginBottom: '8px'}}>
           <li>Slot must be <strong>exactly 30 min</strong>, within <strong>10 AM – 7 PM</strong>, and at least <strong>2 hours ahead</strong>.</li>
           <li>Patient and doctor must both be <strong>active</strong>. Doctor department must <strong>match</strong>.</li>

@@ -211,38 +211,9 @@ def create_bill():
         # Standard bill — require at least a consultation fee
         if consultation_fee <= 0:
             return jsonify({'error': 'consultation_fee is required and must be > 0 for COMPLETED appointments'}), 400
-
-    elif appt_status == 'CANCELLED':
-        # Cancellation bill — derive charge from policy
-        bill_type       = 'cancellation'
-        is_cancellation = True
-        pol             = data.get('cancellation_policy', {})
-        cancellation_policy = pol.get('policy', 'FULL_REFUND')
-        charge_pct_val  = float(pol.get('charge_pct', 0.0))
-
-        if charge_pct_val == 0.0:
-            # Full refund → VOID immediately
-            bill_status       = 'VOID'
-            consultation_fee  = 0.0
-            medication_cost   = 0.0
-        else:
-            # Partial charge: apply charge_pct to original consultation fee
-            base_fee         = float(data.get('original_consultation_fee', consultation_fee) or 0)
-            consultation_fee = round(base_fee * charge_pct_val, 2)
-            medication_cost  = 0.0   # medication not charged on cancellation
-
-    elif appt_status == 'NO_SHOW':
-        # Full consultation fee charged
-        bill_type       = 'noshow'
-        is_cancellation = True
-        cancellation_policy = 'NO_SHOW_FULL_CHARGE'
-        charge_pct_val  = 1.0
-        if consultation_fee <= 0:
-            return jsonify({'error': 'consultation_fee is required for NO_SHOW billing'}), 400
-
     else:
         return jsonify({
-            'error': f"Bill can only be created for COMPLETED, CANCELLED, or NO_SHOW appointments. Current status: {appt_status}"
+            'error': f"Bill can only be created for COMPLETED appointments. Current status: {appt_status}"
         }), 409
 
     ok, err = _verify_patient(data['patient_id'])

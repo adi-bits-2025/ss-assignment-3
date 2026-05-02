@@ -183,6 +183,25 @@ def _verify_doctor(doctor_id, department=None):
         return False, "Doctor service timed out", None
 
 
+def _verify_doctor_published_slot(doctor_id, slot_start, slot_end):
+    """Ensure the doctor has a published slot in doctor-schedule-service that covers this time."""
+    try:
+        resp = requests.get(f"{DOCTOR_SCHEDULE_SERVICE_URL}/doctors/{doctor_id}/slots?available=true", timeout=5)
+        if resp.status_code != 200:
+            return "Could not fetch doctor availability slots"
+        slots = resp.json()
+        for s in slots:
+            pub_start = datetime.fromisoformat(s['slot_start'])
+            pub_end   = datetime.fromisoformat(s['slot_end'])
+            # The requested slot must be completely encompassed by a published available slot.
+            if slot_start >= pub_start and slot_end <= pub_end:
+                return None
+        return "Doctor is not available during the requested time slot. Please select a published availability slot."
+    except Exception as e:
+        logger.error('failed_to_fetch_doctor_slots', extra={'error': str(e)})
+        return "Doctor schedule service unavailable"
+
+
 def _validate_slot_times(slot_start, slot_end):
     """Common slot validation: duration (≥30 min, multiple of 30), clinic hours, lead time."""
     duration_minutes = (slot_end - slot_start).total_seconds() / 60
@@ -308,6 +327,11 @@ def create_appointment():
     if cap_err:
         return jsonify({'error': cap_err}), 409
 
+    # ── Doctor published availability ─────────────────────────────────────────
+    avail_err = _verify_doctor_published_slot(int(data['doctor_id']), slot_start, slot_end)
+    if avail_err:
+        return jsonify({'error': avail_err}), 409
+
     # ── Doctor overlap ────────────────────────────────────────────────────────
     doc_overlap = _check_doctor_overlap(int(data['doctor_id']), slot_start, slot_end)
     if doc_overlap:
@@ -359,9 +383,12 @@ def get_appointment(appt_id):
     return jsonify(appt.to_dict())
 
 
-@app.route('/appointments/<int:appt_id>/status', methods=['PATCH'])
+@app.route('/appointments/<int:appt_id>/status', methods=['PATCH', 'POST'])
 def update_status(appt_id):
-    """Generic status update — enforces the state machine."""
+    """Generic status update — enforces the state machine.
+
+    Supports PATCH for API clients and POST for compatibility with seed scripts or clients that cannot send PATCH.
+    """
     appt = db.session.get(Appointment, appt_id)
     if not appt:
         return jsonify({'error': 'Appointment not found'}), 404
@@ -435,6 +462,11 @@ def reschedule(appt_id):
     cap_err = _check_doctor_daily_capacity(appt.doctor_id, slot_start, doctor_data)
     if cap_err:
         return jsonify({'error': cap_err}), 409
+
+    # ── Doctor published availability ─────────────────────────────────────────
+    avail_err = _verify_doctor_published_slot(appt.doctor_id, slot_start, slot_end)
+    if avail_err:
+        return jsonify({'error': avail_err}), 409
 
     # ── Doctor overlap on new slot (excluding current appt) ───────────────────
     doc_overlap = _check_doctor_overlap(appt.doctor_id, slot_start, slot_end,
