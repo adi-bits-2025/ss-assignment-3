@@ -4,30 +4,19 @@
 $ErrorActionPreference = "Stop"
 Write-Host "=== CLEAN RESTART OF HMS ON MINIKUBE ===" -ForegroundColor Cyan
 
-# ------------------------------------------------------------
-# 1. Tear down existing Kubernetes resources
-# ------------------------------------------------------------
-Write-Host "`n[1/9] Deleting namespace hms (if exists)..." -ForegroundColor Yellow
+# Stop any running port-forward jobs and cleanup
+Get-Job | Stop-Job
+Get-Job | Remove-Job
+
+# Delete the application namespace to clear all resources
 kubectl delete namespace hms --ignore-not-found
 
-# Write-Host "Waiting for namespace termination..."
-# $timeout = 60
-# $elapsed = 0
-# # Check if namespace still exists before waiting
-# $ns = kubectl get namespace hms -o name 2>$null
-# if ($ns) {
-#     while ($elapsed -lt $timeout) {
-#         $ns = kubectl get namespace hms -o name 2>$null
-#         if (-not $ns) { break }
-#         Start-Sleep -Seconds 2
-#         $elapsed += 2
-#     }
-# }
+# Restart Minikube for a fresh cluster state
+minikube stop
+minikube start
 
-# ------------------------------------------------------------
-# 2. Rebuild Docker images inside Minikube's Docker daemon
-# ------------------------------------------------------------
-Write-Host "`n[2/9] Building Docker images inside Minikube..." -ForegroundColor Yellow
+# Rebuild all service images inside Minikube's Docker daemon
+Write-Host "`n[1/7] Building Docker images inside Minikube..." -ForegroundColor Yellow
 minikube docker-env --shell powershell | Invoke-Expression
 
 $services = @(
@@ -48,19 +37,16 @@ foreach ($svc in $services) {
     }
 }
 
-# minikube docker-env --unset | Invoke-Expression
+# Reset Docker environment back to local
+minikube docker-env --unset | Invoke-Expression
 Write-Host "All images built successfully."
 
-# ------------------------------------------------------------
-# 3. Recreate namespace
-# ------------------------------------------------------------
-Write-Host "`n[3/9] Creating namespace hms..." -ForegroundColor Yellow
+# Recreate the application namespace
+Write-Host "`n[2/7] Creating namespace hms..." -ForegroundColor Yellow
 kubectl create namespace hms
 
-# ------------------------------------------------------------
-# 4. Apply all Kubernetes manifests from infra/k8s
-# ------------------------------------------------------------
-Write-Host "`n[4/9] Applying Kubernetes manifests..." -ForegroundColor Yellow
+# Apply all Kubernetes manifests from infra/k8s
+Write-Host "`n[3/7] Applying Kubernetes manifests..." -ForegroundColor Yellow
 
 $k8sDir = ".\infra\k8s"
 if (-not (Test-Path $k8sDir)) {
@@ -85,23 +71,13 @@ kubectl apply -f demo-ui.yaml -n hms
 Pop-Location
 Write-Host "Manifests applied."
 
-# # ------------------------------------------------------------
-# # 5. Create doctor-service alias (fix for appointment 503)
-# # ------------------------------------------------------------
-# Write-Host "`n[5/9] Creating doctor-service alias..." -ForegroundColor Yellow
-# kubectl expose deployment doctor-schedule-service --name=doctor-service --port=5002 --target-port=5002 -n hms
-
-# ------------------------------------------------------------
-# 6. Wait for all pods to be Ready
-# ------------------------------------------------------------
-Write-Host "`n[6/9] Waiting for all pods to become Ready..." -ForegroundColor Yellow
+# Wait for all pods to be in Ready state
+Write-Host "`n[4/7] Waiting for all pods to become Ready..." -ForegroundColor Yellow
 kubectl wait --for=condition=Ready pods --all -n hms --timeout=120s
 Write-Host "All pods are running."
 
-# ------------------------------------------------------------
-# 7. Start port-forwarding in background jobs
-# ------------------------------------------------------------
-Write-Host "`n[7/9] Starting port-forwarding jobs..." -ForegroundColor Yellow
+# Start port-forwarding for all services and monitoring tools
+Write-Host "`n[5/7] Starting port-forwarding jobs..." -ForegroundColor Yellow
 $forwardCmds = @(
     { kubectl port-forward -n hms svc/patient-service 5001:5001 },
     { kubectl port-forward -n hms svc/doctor-schedule-service 5002:5002 },
@@ -118,10 +94,8 @@ foreach ($cmd in $forwardCmds) {
 Write-Host "Port-forwarding jobs started. Waiting 5 seconds for them to establish..."
 Start-Sleep -Seconds 5
 
-# ------------------------------------------------------------
-# 8. Run the seed script
-# ------------------------------------------------------------
-Write-Host "`n[8/9] Running seed script..." -ForegroundColor Yellow
+# Run the database seed script
+Write-Host "`n[6/7] Running seed script..." -ForegroundColor Yellow
 if (Test-Path ".\services\seed_all.py") {
     Push-Location .\services
     python seed_all.py
@@ -131,15 +105,9 @@ if (Test-Path ".\services\seed_all.py") {
     Write-Warning "seed_all.py not found in .\services. Skipping seeding."
 }
 
-# ------------------------------------------------------------
-# 9. Display access URL for Demo UI
-# ------------------------------------------------------------
-Write-Host "`n[9/9] Retrieving Demo UI URL..." -ForegroundColor Yellow
-$url = minikube service demo-ui -n hms --url
-Write-Host "================================================" -ForegroundColor Green
-Write-Host "HMS is ready! Open the following URL in your browser:" -ForegroundColor Green
-Write-Host $url -ForegroundColor White
-Write-Host "================================================" -ForegroundColor Green
+Write-Host "`n Services Running in pods -" -ForegroundColor Gray
+kubectl get pods -n hms -w
 
-Write-Host "`nTo stop port-forwarding later, run: Get-Job | Stop-Job; Get-Job | Remove-Job" -ForegroundColor Gray
-Write-Host "Script completed successfully." -ForegroundColor Cyan
+# Display the Demo UI URL
+Write-Host "`n[7/7] Retrieving Demo UI URL..." -ForegroundColor Yellow
+minikube service demo-ui -n hms --url
