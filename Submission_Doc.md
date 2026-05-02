@@ -2,7 +2,9 @@
 
 **Project Name:** Hospital Management System (HMS)  
 **Group Name:** Group 15  
-**Course:** Scalable Services – Microservices-Based Application Development  
+**Course:** Scalable Services
+**Video Link:** 
+https://drive.google.com/file/d/11GllM9bcXQ-mp_RrbORDs8s-NnSvwJCH/view?usp=drive_link
 
 ---
 
