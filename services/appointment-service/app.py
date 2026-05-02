@@ -213,6 +213,33 @@ def _verify_doctor(doctor_id):
     except requests.exceptions.Timeout:
         return False, "Doctor schedule service timed out"
 
+
+def _check_slot_availability(doctor_id, slot_start, slot_end):
+    """Check if a doctor slot is available (not booked by other patients in SCHEDULED status).
+    Also reject if there's a cancelled appointment for the same slot.
+    Returns (available: bool, error_msg: str|None)."""
+    try:
+        # Get all appointments for this doctor in this time slot
+        overlapping = Appointment.query.filter(
+            Appointment.doctor_id == doctor_id,
+            Appointment.slot_start < slot_end,
+            Appointment.slot_end > slot_start
+        ).all()
+        
+        # Check for cancelled appointments at the same slot (reject booking)
+        for appt in overlapping:
+            if appt.status == 'CANCELLED':
+                return False, "Cannot book slot where a cancelled appointment exists"
+        
+        # Check for existing SCHEDULED/COMPLETED appointments (slot conflict)
+        for appt in overlapping:
+            if appt.status in ('SCHEDULED', 'COMPLETED'):
+                return False, "Slot is not available (overlaps with existing appointment)"
+        
+        return True, None
+    except Exception as e:
+        return False, f"Error checking slot availability: {str(e)}"
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route('/appointments', methods=['POST'])
 def create_appointment():
@@ -245,6 +272,11 @@ def create_appointment():
     if status not in VALID_STATUSES:
         return jsonify({'error': f"Invalid status. Must be one of: {', '.join(VALID_STATUSES)}"}), 400
 
+    # Validate slot availability
+    available, err = _check_slot_availability(int(data['doctor_id']), slot_start, slot_end)
+    if not available:
+        return jsonify({'error': err}), 409
+
     appt = Appointment(
         id=int(data['id']) if data.get('id') else None,
         patient_id=int(data['patient_id']),
@@ -252,6 +284,7 @@ def create_appointment():
         department=data['department'],
         slot_start=slot_start, slot_end=slot_end,
         status=status,
+        reschedule_count=0,
     )
     db.session.add(appt)
     db.session.commit()
@@ -318,6 +351,10 @@ def reschedule(appt_id):
     if appt.status != 'SCHEDULED':
         return jsonify({'error': 'Only SCHEDULED appointments can be rescheduled'}), 409
 
+    # Check reschedule limit (max 2 reschedules)
+    if appt.reschedule_count >= 2:
+        return jsonify({'error': 'Maximum reschedules (2) reached for this appointment'}), 409
+
     data = request.get_json(force=True) or {}
     missing = [f for f in ('slot_start', 'slot_end') if not data.get(f)]
     if missing:
@@ -337,11 +374,25 @@ def reschedule(appt_id):
     if not ok:
         return jsonify({'error': err}), 503
 
+    # Validate new slot availability (exclude current appointment from conflict check)
+    # We need to ensure the new slot doesn't conflict with other appointments for the same doctor
+    conflicting = Appointment.query.filter(
+        Appointment.doctor_id == appt.doctor_id,
+        Appointment.id != appt_id,  # Exclude the current appointment
+        Appointment.slot_start < slot_end,
+        Appointment.slot_end > slot_start,
+        Appointment.status.in_(['SCHEDULED', 'COMPLETED'])
+    ).first()
+    if conflicting:
+        return jsonify({'error': 'New slot is not available (overlaps with existing appointment)'}), 409
+
     appt.slot_start = slot_start
-    appt.slot_end   = slot_end
+    appt.slot_end = slot_end
+    appt.reschedule_count += 1
     db.session.commit()
     logger.info('appointment_rescheduled', extra={
         'appointment_id': appt_id, 'doctor_id': appt.doctor_id,
+        'reschedule_count': appt.reschedule_count,
     })
     return jsonify(appt.to_dict())
 

@@ -152,6 +152,8 @@ function App() {
   });
 
   const [appointmentForm, setAppointmentForm] = useState({
+    patientId: '',
+    doctorId: '',
     department: 'Cardiology',
     slotStart: fromNow(180),
     slotEnd: fromNow(210),
@@ -160,18 +162,21 @@ function App() {
   });
 
   const [billingForm, setBillingForm] = useState({
+    appointmentId: '',
     consultation: 750,
     medication: 250,
     cancellationTiming: 'more_than_2_hours'
   });
 
   const [prescriptionForm, setPrescriptionForm] = useState({
+    appointmentId: '',
     medication: 'Atorvastatin',
     dosage: '1-0-0',
     days: 14
   });
 
   const [paymentForm, setPaymentForm] = useState({
+    billId: '',
     amount: 300,
     method: 'CARD',
     idempotencyKey: `pay-${seed}`
@@ -182,6 +187,8 @@ function App() {
   const [appointments, setAppointments] = useState([]);
   const [bills, setBills] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
+  const [appointmentForBilling, setAppointmentForBilling] = useState(null);
+  const [cancellationCharges, setCancellationCharges] = useState(null);
 
   const billTotal = useMemo(() => {
     const subtotal = Number(billingForm.consultation) + Number(billingForm.medication);
@@ -386,10 +393,10 @@ function App() {
   }
 
   async function bookAppointment() {
-    if (!ids.patientId || !ids.doctorId) return;
+    if (!appointmentForm.patientId || !appointmentForm.doctorId) return;
     const result = await execute('appointment', 'Book appointment', 'POST', '/appointments', {
-      patient_id: Number(ids.patientId),
-      doctor_id: Number(ids.doctorId),
+      patient_id: Number(appointmentForm.patientId),
+      doctor_id: Number(appointmentForm.doctorId),
       department: appointmentForm.department,
       slot_start: apiDateTime(appointmentForm.slotStart),
       slot_end: apiDateTime(appointmentForm.slotEnd)
@@ -462,19 +469,66 @@ function App() {
     }
   }
 
+  async function checkAppointmentStatusForBilling() {
+    if (!billingForm.appointmentId) {
+      setAppointmentForBilling(null);
+      setCancellationCharges(null);
+      return;
+    }
+    const result = await requestApi('appointment', `/appointments/${billingForm.appointmentId}`).catch(() => null);
+    if (result?.ok) {
+      setAppointmentForBilling(result.body);
+      if (result.body.status === 'CANCELLED') {
+        const chargesResult = await requestApi('billing', '/bills/cancellation-charges').catch(() => null);
+        setCancellationCharges(chargesResult?.ok ? chargesResult.body : null);
+      } else {
+        setCancellationCharges(null);
+      }
+    } else {
+      setAppointmentForBilling(null);
+      setCancellationCharges(null);
+    }
+  }
+
   async function createBill() {
-    if (!ids.patientId || !ids.appointmentId) return;
-    const result = await execute('billing', 'Generate bill for completed appointment', 'POST', '/bills', {
+    if (!billingForm.appointmentId) return;
+    
+    // Check appointment status first
+    const apptResult = await requestApi('appointment', `/appointments/${billingForm.appointmentId}`).catch(() => null);
+    if (!apptResult?.ok) {
+      addEvent('billing', 'error', 'Appointment not found', 'Cannot fetch appointment details', apptResult?.body);
+      return;
+    }
+
+    const apptStatus = apptResult.body.status;
+    const billData = {
       patient_id: Number(ids.patientId),
-      appointment_id: Number(ids.appointmentId),
-      amount: billTotal.total
-    });
+      appointment_id: Number(billingForm.appointmentId)
+    };
+
+    if (apptStatus === 'COMPLETED') {
+      billData.amount = billTotal.total;
+    } else if (apptStatus === 'CANCELLED') {
+      addEvent(
+        'billing',
+        'info',
+        'Billing blocked for cancelled appointment',
+        'Bill is generated only for COMPLETED appointments. Default cancellation charges are shown in the form.'
+      );
+      return;
+    } else {
+      addEvent('billing', 'error', 'Invalid appointment status', `Bill can only be generated for COMPLETED appointments. Current status: ${apptStatus}`);
+      return;
+    }
+
+    const result = await execute('billing', 'Generate bill', 'POST', '/bills', billData);
     if (result.ok) {
       setIds((current) => ({ ...current, billId: result.body.id }));
-      addEvent('billing', 'success', 'Tax calculation demonstrated', 'Bill amount includes consultation, medication, and 5 percent tax.', billTotal);
+      const message = 'Bill amount includes consultation, medication, and 5 percent tax';
+      addEvent('billing', 'success', 'Bill generated', message, result.body);
       addEvent('notification', 'info', 'Billing notification alert', 'Billing event alert prepared for patient communication.', {
         billId: result.body.id,
-        amount: billTotal.total
+        amount: result.body.amount
       });
       refreshLists();
     }
@@ -515,9 +569,9 @@ function App() {
   }
 
   async function createPrescription() {
-    if (!ids.appointmentId || !ids.patientId || !ids.doctorId) return;
+    if (!prescriptionForm.appointmentId || !ids.patientId || !ids.doctorId) return;
     const result = await execute('prescription', 'Create prescription linked to appointment', 'POST', '/prescriptions', {
-      appointment_id: Number(ids.appointmentId),
+      appointment_id: Number(prescriptionForm.appointmentId),
       patient_id: Number(ids.patientId),
       doctor_id: Number(ids.doctorId),
       medication: prescriptionForm.medication,
@@ -550,9 +604,9 @@ function App() {
   }
 
   async function chargePayment(repeat = false) {
-    if (!ids.billId) return;
+    if (!paymentForm.billId) return;
     const paymentId = repeat ? ids.paymentId : Number(Date.now().toString().slice(-6));
-    const result = await execute('billing', repeat ? 'Repeat same idempotent payment' : 'Charge payment with idempotency key', 'POST', `/bills/${ids.billId}/payments`, {
+    const result = await execute('billing', repeat ? 'Repeat same idempotent payment' : 'Charge payment with idempotency key', 'POST', `/bills/${paymentForm.billId}/payments`, {
       id: Number(paymentId),
       amount: Number(paymentForm.amount),
       method: paymentForm.method
@@ -658,6 +712,9 @@ function App() {
               createBill={createBill}
               voidBill={voidBill}
               demonstrateCancellationPolicy={demonstrateCancellationPolicy}
+              checkAppointmentStatusForBilling={checkAppointmentStatusForBilling}
+              appointmentForBilling={appointmentForBilling}
+              cancellationCharges={cancellationCharges}
             />
           )}
           {activeTab === 'prescription' && (
@@ -725,16 +782,16 @@ function SubTabs({ tabs, active, onChange }) {
   );
 }
 
-function Field({ label, value, onChange, type = 'text', options }) {
+function Field({ label, value, onChange, type = 'text', options, disabled = false }) {
   return (
     <label className="field">
       <span>{label}</span>
       {options ? (
-        <select value={value} onChange={(event) => onChange(event.target.value)}>
+        <select value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled}>
           {options.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
       ) : (
-        <input type={type} value={value} onChange={(event) => onChange(event.target.value)} />
+        <input type={type} value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} />
       )}
     </label>
   );
@@ -930,15 +987,15 @@ function AppointmentTab(props) {
       />
       {section === 'manage' && <Section title="Book, Complete, And Cancel" icon={CalendarClock}>
         <div className="form-grid">
-          <label className="field"><span>Patient ID</span><input value={ids.patientId || 'Create patient first'} readOnly /></label>
-          <label className="field"><span>Doctor ID</span><input value={ids.doctorId || 'Create doctor first'} readOnly /></label>
+          <Field label="Patient ID" value={form.patientId} onChange={update('patientId')} />
+          <Field label="Doctor ID" value={form.doctorId} onChange={update('doctorId')} />
           <Field label="Department" value={form.department} onChange={update('department')} />
           <Field label="Slot start" type="datetime-local" value={form.slotStart} onChange={update('slotStart')} />
           <Field label="Slot end" type="datetime-local" value={form.slotEnd} onChange={update('slotEnd')} />
           <label className="field"><span>Appointment ID</span><input value={ids.appointmentId || 'Not booked'} readOnly /></label>
         </div>
         <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={props.bookAppointment} disabled={!ids.patientId || !ids.doctorId}>Book appointment</ActionButton>
+          <ActionButton icon={CheckCircle2} onClick={props.bookAppointment} disabled={!form.patientId || !form.doctorId}>Book appointment</ActionButton>
           <ActionButton icon={Activity} onClick={() => props.updateAppointmentStatus('COMPLETED')} disabled={!ids.appointmentId}>Mark completed</ActionButton>
           <ActionButton icon={XCircle} variant="danger" onClick={() => props.updateAppointmentStatus('CANCELLED')} disabled={!ids.appointmentId}>Cancel appointment</ActionButton>
         </div>
@@ -961,7 +1018,7 @@ function AppointmentTab(props) {
 
       {section === 'constraints' && <Section title="Constraint And Conflict Detection Scenario" icon={AlertTriangle}>
         <div className="button-row">
-          <ActionButton icon={AlertTriangle} variant="warning" onClick={props.demonstrateAppointmentConflict} disabled={!ids.patientId || !ids.doctorId}>
+          <ActionButton icon={AlertTriangle} variant="warning" onClick={props.demonstrateAppointmentConflict} disabled={!form.patientId || !form.doctorId}>
             Run overlap scenario
           </ActionButton>
         </div>
@@ -981,7 +1038,7 @@ function AppointmentTab(props) {
 }
 
 function BillingTab(props) {
-  const { form, setForm, ids, bills, billTotal } = props;
+  const { form, setForm, ids, bills, billTotal, checkAppointmentStatusForBilling, appointmentForBilling, cancellationCharges } = props;
   const [section, setSection] = useState('generate');
   const update = (key) => (value) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -997,18 +1054,41 @@ function BillingTab(props) {
       />
       {section === 'generate' && <Section title="Generate Bill With Tax Calculation" icon={Banknote}>
         <div className="form-grid">
-          <Field label="Consultation fee" type="number" value={form.consultation} onChange={update('consultation')} />
-          <Field label="Medication charges" type="number" value={form.medication} onChange={update('medication')} />
-          <label className="field"><span>Appointment ID</span><input value={ids.appointmentId || 'Complete appointment first'} readOnly /></label>
-          <label className="field"><span>Calculated total</span><input value={money(billTotal.total)} readOnly /></label>
+          <Field label="Appointment ID" value={form.appointmentId} onChange={(v) => { update('appointmentId')(v); setTimeout(checkAppointmentStatusForBilling, 100); }} />
+          {appointmentForBilling && (
+            <label className="field"><span>Appointment Status</span><input value={appointmentForBilling.status} readOnly style={{ color: appointmentForBilling.status === 'CANCELLED' ? '#d32f2f' : '#388e3c', fontWeight: 'bold' }} /></label>
+          )}
+          <Field 
+            label="Consultation fee" 
+            type="number" 
+            value={form.consultation} 
+            onChange={update('consultation')}
+            disabled={appointmentForBilling?.status === 'CANCELLED'}
+          />
+          <Field 
+            label="Medication charges" 
+            type="number" 
+            value={form.medication} 
+            onChange={update('medication')}
+            disabled={appointmentForBilling?.status === 'CANCELLED'}
+          />
+          {appointmentForBilling?.status === 'CANCELLED' ? (
+            <div style={{ gridColumn: '1/-1', padding: '12px', backgroundColor: '#fff3e0', borderRadius: '4px', color: '#e65100' }}>
+              <strong>Cancellation:</strong> Billing is disabled. Default policy is <strong>{cancellationCharges?.default_policy || 'more_than_2_hours'}</strong> with charge ratio <strong>{cancellationCharges?.charges?.[cancellationCharges?.default_policy] ?? 0}</strong>.
+            </div>
+          ) : appointmentForBilling?.status === 'COMPLETED' ? (
+            <label className="field"><span>Calculated total</span><input value={money(billTotal.total)} readOnly /></label>
+          ) : null}
         </div>
-        <div className="totals">
-          <span>Subtotal: <strong>{money(billTotal.subtotal)}</strong></span>
-          <span>Tax 5%: <strong>{money(billTotal.tax)}</strong></span>
-          <span>Total: <strong>{money(billTotal.total)}</strong></span>
-        </div>
+        {appointmentForBilling?.status === 'COMPLETED' && (
+          <div className="totals">
+            <span>Subtotal: <strong>{money(billTotal.subtotal)}</strong></span>
+            <span>Tax 5%: <strong>{money(billTotal.tax)}</strong></span>
+            <span>Total: <strong>{money(billTotal.total)}</strong></span>
+          </div>
+        )}
         <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={props.createBill} disabled={!ids.patientId || !ids.appointmentId}>Generate bill</ActionButton>
+          <ActionButton icon={CheckCircle2} onClick={props.createBill} disabled={!appointmentForBilling || !form.appointmentId || appointmentForBilling?.status === 'CANCELLED'}>Generate bill</ActionButton>
         </div>
       </Section>}
 
@@ -1062,14 +1142,14 @@ function PrescriptionTab(props) {
       />
       {section === 'create' && <Section title="Create And Retrieve Appointment Prescription" icon={ClipboardList}>
         <div className="form-grid">
-          <label className="field"><span>Appointment ID</span><input value={ids.appointmentId || 'Book appointment first'} readOnly /></label>
+          <Field label="Appointment ID" value={form.appointmentId} onChange={update('appointmentId')} />
           <Field label="Medication" value={form.medication} onChange={update('medication')} />
           <Field label="Dosage" value={form.dosage} onChange={update('dosage')} />
           <Field label="Days" type="number" value={form.days} onChange={update('days')} />
           <label className="field"><span>Prescription ID</span><input value={ids.prescriptionId || 'Not created'} readOnly /></label>
         </div>
         <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={props.createPrescription} disabled={!ids.appointmentId}>Create prescription</ActionButton>
+          <ActionButton icon={CheckCircle2} onClick={props.createPrescription} disabled={!form.appointmentId}>Create prescription</ActionButton>
           <ActionButton icon={Search} onClick={props.retrievePrescription} disabled={!ids.prescriptionId}>Retrieve prescription</ActionButton>
           <ActionButton icon={AlertTriangle} variant="warning" onClick={props.invalidPrescriptionScenario}>Invalid appointment scenario</ActionButton>
         </div>
@@ -1107,7 +1187,7 @@ function PaymentNotificationTab(props) {
       />
       {section === 'payment' && <Section title="Payment Idempotency Demonstration" icon={Banknote}>
         <div className="form-grid">
-          <label className="field"><span>Bill ID</span><input value={ids.billId || 'Generate bill first'} readOnly /></label>
+          <Field label="Bill ID" value={form.billId} onChange={update('billId')} />
           <Field label="Amount" type="number" value={form.amount} onChange={update('amount')} />
           <Field
             label="Method"
@@ -1122,8 +1202,8 @@ function PaymentNotificationTab(props) {
           <Field label="Idempotency key" value={form.idempotencyKey} onChange={update('idempotencyKey')} />
         </div>
         <div className="button-row">
-          <ActionButton icon={CheckCircle2} onClick={() => props.chargePayment(false)} disabled={!ids.billId}>Charge payment</ActionButton>
-          <ActionButton icon={ShieldCheck} variant="warning" onClick={() => props.chargePayment(true)} disabled={!ids.billId || !ids.paymentId}>Repeat same key</ActionButton>
+          <ActionButton icon={CheckCircle2} onClick={() => props.chargePayment(false)} disabled={!form.billId}>Charge payment</ActionButton>
+          <ActionButton icon={ShieldCheck} variant="warning" onClick={() => props.chargePayment(true)} disabled={!form.billId || !ids.paymentId}>Repeat same key</ActionButton>
         </div>
       </Section>}
 

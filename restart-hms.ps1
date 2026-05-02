@@ -38,7 +38,7 @@ foreach ($svc in $services) {
 }
 
 # Reset Docker environment back to local
-minikube docker-env --unset | Invoke-Expression
+# minikube docker-env --unset | Invoke-Expression
 Write-Host "All images built successfully."
 
 # Recreate the application namespace

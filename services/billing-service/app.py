@@ -216,41 +216,71 @@ def _verify_patient(patient_id):
 
 
 def _verify_appointment(appointment_id):
+    """Returns (ok: bool, error_msg: str|None, appointment_data: dict|None)."""
     try:
         resp = requests.get(f"{APPOINTMENT_SERVICE_URL}/appointments/{appointment_id}", timeout=5)
         if resp.status_code == 404:
-            return False, f"Appointment {appointment_id} not found"
+            return False, f"Appointment {appointment_id} not found", None
         resp.raise_for_status()
-        return True, None
+        return True, None, resp.json()
     except requests.exceptions.ConnectionError:
-        return False, "Appointment service unavailable"
+        return False, "Appointment service unavailable", None
     except requests.exceptions.Timeout:
-        return False, "Appointment service timed out"
+        return False, "Appointment service timed out", None
+
+# ── Cancellation Charges Configuration ────────────────────────────────────────
+CANCELLATION_CHARGES = {
+    'more_than_2_hours': 0.0,      # No charge
+    'within_2_hours': 0.5,          # 50% charge
+    'no_show': 1.0                   # 100% charge
+}
+DEFAULT_CANCELLATION_POLICY = os.environ.get('DEFAULT_CANCELLATION_POLICY', 'more_than_2_hours')
 
 # ── Bill Routes ───────────────────────────────────────────────────────────────
 @app.route('/bills', methods=['POST'])
 def create_bill():
     data = request.get_json(force=True) or {}
-    missing = [f for f in ('patient_id', 'appointment_id', 'amount') if not data.get(f)]
+    missing = [f for f in ('patient_id', 'appointment_id') if not data.get(f)]
     if missing:
         return jsonify({'error': f"Missing fields: {', '.join(missing)}"}), 400
     if data.get('id') and db.session.get(Bill, int(data['id'])):
         return jsonify({'error': 'Bill already exists'}), 409
 
-    try:
-        amount = float(data['amount'])
-        if amount <= 0:
-            raise ValueError
-    except (ValueError, TypeError):
-        return jsonify({'error': 'amount must be a positive number'}), 400
+    ok, err, appt_data = _verify_appointment(data['appointment_id'])
+    if not ok:
+        return jsonify({'error': err}), 404 if 'not found' in err else 503
+
+    # Check appointment status
+    appt_status = appt_data.get('status')
+    if appt_status == 'CANCELLED':
+        policy = DEFAULT_CANCELLATION_POLICY if DEFAULT_CANCELLATION_POLICY in CANCELLATION_CHARGES else 'more_than_2_hours'
+        ratio = CANCELLATION_CHARGES[policy]
+        return jsonify({
+            'bill_generated': False,
+            'reason': 'Appointment is CANCELLED. Bill generation is only allowed for COMPLETED appointments.',
+            'is_cancellation': True,
+            'cancellation_policy': policy,
+            'cancellation_ratio': ratio,
+            'default_cancellation_charge': 0.0,
+            'status': 'CANCELLED'
+        }), 200
+    elif appt_status == 'COMPLETED':
+        # Generate bill with provided amount
+        if not data.get('amount'):
+            return jsonify({'error': 'amount field is required for COMPLETED appointments'}), 400
+        try:
+            amount = float(data['amount'])
+            if amount <= 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            return jsonify({'error': 'amount must be a positive number'}), 400
+    else:
+        return jsonify({'error': f"Bill can only be generated for COMPLETED appointments. Current status: {appt_status}"}), 409
 
     ok, err = _verify_patient(data['patient_id'])
     if not ok:
         return jsonify({'error': err}), 404 if 'not found' in err else 503
 
-    ok, err = _verify_appointment(data['appointment_id'])
-    if not ok:
-        return jsonify({'error': err}), 404 if 'not found' in err else 503
     status = (data.get('status') or 'OPEN').upper()
     if status not in VALID_BILL_STATUSES:
         return jsonify({'error': f"Invalid status. Must be one of: {', '.join(VALID_BILL_STATUSES)}"}), 400
@@ -261,6 +291,7 @@ def create_bill():
         appointment_id=int(data['appointment_id']),
         amount=amount,
         status=status,
+        is_cancellation=False,
     )
     t0 = time.time()
     db.session.add(bill)
@@ -270,8 +301,19 @@ def create_bill():
     logger.info('bill_created', extra={
         'bill_id': bill.id, 'patient_id': bill.patient_id,
         'appointment_id': bill.appointment_id, 'amount': bill.amount,
+        'is_cancellation': bill.is_cancellation,
     })
     return jsonify(bill.to_dict()), 201
+
+
+@app.route('/bills/cancellation-charges', methods=['GET'])
+def cancellation_charges():
+    policy = DEFAULT_CANCELLATION_POLICY if DEFAULT_CANCELLATION_POLICY in CANCELLATION_CHARGES else 'more_than_2_hours'
+    return jsonify({
+        'default_policy': policy,
+        'charges': CANCELLATION_CHARGES,
+        'default_cancellation_charge': 0.0
+    }), 200
 
 
 @app.route('/bills', methods=['GET'])

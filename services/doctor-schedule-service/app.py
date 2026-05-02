@@ -1,11 +1,11 @@
 import os
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, time
 
 from flask import Flask, request, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import event
+from sqlalchemy import event, func
 from pythonjsonlogger import jsonlogger
 from prometheus_client import Counter, generate_latest, CONTENT_TYPE_LATEST
 
@@ -234,7 +234,7 @@ def create_doctor():
     doctor = Doctor(
         id=int(data['id']) if data.get('id') else None,
         name=data['name'], email=data['email'], phone=str(data['phone']),
-        department=data['department'], specialization=data['specialization'],
+        department=data['department'].strip(), specialization=data['specialization'],
     )
     db.session.add(doctor)
     db.session.commit()
@@ -248,10 +248,32 @@ def create_doctor():
 @app.route('/doctors', methods=['GET'])
 def list_doctors():
     dept = request.args.get('department')
+    page = request.args.get('page', 1, type=int)
+    pageSize = request.args.get('pageSize', type=int)
     q = Doctor.query
     if dept:
-        q = q.filter_by(department=dept)
-    return jsonify([d.to_dict() for d in q.all()])
+        dept = dept.strip()
+        q = q.filter(func.lower(Doctor.department) == func.lower(dept))
+        doctors = q.all()
+        return jsonify({
+            'items': [d.to_dict() for d in doctors],
+            'total': len(doctors),
+            'page': 1,
+            'pageSize': len(doctors)
+        })
+    else:
+        doctors = q.all()
+        total = len(doctors)
+        if pageSize and pageSize > 0:
+            start = (page - 1) * pageSize
+            end = start + pageSize
+            doctors = doctors[start:end]
+        return jsonify({
+            'items': [d.to_dict() for d in doctors],
+            'total': total,
+            'page': page,
+            'pageSize': pageSize or total
+        })
 
 
 @app.route('/doctors/<int:doctor_id>', methods=['GET'])
@@ -271,7 +293,10 @@ def update_doctor(doctor_id):
     data = request.get_json(force=True) or {}
     for field in ('name', 'phone', 'department', 'specialization'):
         if field in data:
-            setattr(doctor, field, str(data[field]))
+            value = data[field]
+            if field == 'department':
+                value = value.strip()
+            setattr(doctor, field, str(value))
     if 'email' in data:
         existing = Doctor.query.filter_by(email=data['email']).first()
         if existing and existing.id != doctor_id:
@@ -310,6 +335,18 @@ def add_slot(doctor_id):
 
     if slot_end <= slot_start:
         return jsonify({'error': 'slot_end must be after slot_start'}), 400
+
+    # Validate clinic hours: 10 AM - 7 PM
+    clinic_open = time(10, 0)
+    clinic_close = time(19, 0)
+    if slot_start.time() < clinic_open or slot_end.time() > clinic_close:
+        return jsonify({'error': 'Slot must be within clinic hours 10 AM - 7 PM'}), 400
+
+    # Check for overlapping slots
+    existing_slots = DoctorSlot.query.filter_by(doctor_id=doctor_id).all()
+    for existing in existing_slots:
+        if not (slot_end <= existing.slot_start or slot_start >= existing.slot_end):
+            return jsonify({'error': 'Slot overlaps with existing slot'}), 409
 
     slot = DoctorSlot(doctor_id=doctor_id, slot_start=slot_start,
                       slot_end=slot_end, is_available=True)
